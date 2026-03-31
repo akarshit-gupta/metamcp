@@ -11,9 +11,21 @@ import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
+import {
+  removeUserContextForSession,
+  setUserContextForNamespace,
+  setUserContextForSession,
+} from "../../lib/metamcp/user-context-store";
 import { SessionLifetimeManagerImpl } from "../../lib/session-lifetime-manager";
 
 const sseRouter = express.Router();
+
+const getHeaderString = (
+  value: string | string[] | undefined,
+): string | undefined => {
+  if (!value) return undefined;
+  return Array.isArray(value) ? value[0] : value;
+};
 
 // Session lifetime manager for SSE sessions
 const sessionManager = new SessionLifetimeManagerImpl<Transport>("SSE");
@@ -39,6 +51,7 @@ const cleanupSession = async (sessionId: string, transport?: Transport) => {
 
     // Clean up MetaMCP server pool session
     await metaMcpServerPool.cleanupSession(sessionId);
+    removeUserContextForSession(sessionId);
 
     logger.info(`Session ${sessionId} cleanup completed successfully`);
   } catch (error) {
@@ -71,6 +84,19 @@ sseRouter.get(
       logger.info("Created public endpoint SSE transport");
 
       const sessionId = webAppTransport.sessionId;
+      const userId = getHeaderString(req.headers["x-user-id"]);
+      const userEmail = getHeaderString(req.headers["x-user-email"]);
+      const userRole = getHeaderString(req.headers["x-user-role"]);
+
+      const userContext = {
+        userId,
+        userEmail,
+        userRole,
+        authMethod: authReq.authMethod,
+        authenticatedUserId: authReq.oauthUserId || authReq.apiKeyUserId,
+      };
+      setUserContextForSession(sessionId, userContext);
+      setUserContextForNamespace(namespaceUuid, userContext);
 
       // Get or create MetaMCP server instance from the pool
       const mcpServerInstance = await metaMcpServerPool.getServer(

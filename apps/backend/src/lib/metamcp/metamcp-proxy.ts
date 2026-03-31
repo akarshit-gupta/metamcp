@@ -19,6 +19,7 @@ import {
   ResourceTemplate,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { ServerParameters } from "@repo/zod-types";
 import { z } from "zod";
 
 import logger from "@/utils/logger";
@@ -45,7 +46,40 @@ import {
 } from "./metamcp-middleware/tool-overrides.functional";
 import { parseToolName } from "./tool-name-parser";
 import { toolsSyncCache } from "./tools-sync-cache";
+import {
+  getUserContextForNamespace,
+  getUserContextForSession,
+} from "./user-context-store";
 import { sanitizeName } from "./utils";
+
+const addUserContextHeadersToServerParams = (
+  serverParams: ServerParameters,
+  sessionId: string,
+  namespaceUuid: string,
+): ServerParameters => {
+  const userContext =
+    getUserContextForSession(sessionId) ||
+    getUserContextForNamespace(namespaceUuid);
+  if (!userContext) {
+    return serverParams;
+  }
+
+  return {
+    ...serverParams,
+    headers: {
+      ...(serverParams.headers || {}),
+      ...(userContext.userId
+        ? { "x-user-id": userContext.userId }
+        : {}),
+      ...(userContext.userEmail
+        ? { "x-user-email": userContext.userEmail }
+        : {}),
+      ...(userContext.userRole
+        ? { "x-user-role": userContext.userRole }
+        : {}),
+    },
+  };
+};
 
 /**
  * Filter out tools that are overrides of existing tools to prevent duplicates in database
@@ -181,7 +215,11 @@ export const createServer = async (
         const session = await mcpServerPool.getSession(
           context.sessionId,
           mcpServerUuid,
-          params,
+          addUserContextHeadersToServerParams(
+            params,
+            context.sessionId,
+            context.namespaceUuid,
+          ),
           namespaceUuid,
         );
         if (!session) {
@@ -349,7 +387,11 @@ export const createServer = async (
           const session = await mcpServerPool.getSession(
             sessionId,
             mcpServerUuid,
-            params,
+            addUserContextHeadersToServerParams(
+              params,
+              sessionId,
+              namespaceUuid,
+            ),
             namespaceUuid,
           );
 
@@ -438,13 +480,26 @@ export const createServer = async (
         maxTotalTimeout,
       };
       // Use the correct schema for tool calls
+      const userContext =
+        getUserContextForSession(sessionId) ||
+        getUserContextForNamespace(namespaceUuid);
+      logger.info("Forwarding tool call with MetaMCP user context", {
+        sessionId,
+        toolName: name,
+        originalToolName,
+        hasUserContext: !!userContext,
+        userContext,
+      });
       const result = await clientForTool.client.request(
         {
           method: "tools/call",
           params: {
             name: originalToolName,
             arguments: args || {},
-            _meta: request.params._meta,
+            _meta: {
+              ...(request.params._meta || {}),
+              ...(userContext ? { metamcpUserContext: userContext } : {}),
+            },
           },
         },
         CompatibilityCallToolResultSchema,
@@ -579,7 +634,7 @@ export const createServer = async (
         const session = await mcpServerPool.getSession(
           sessionId,
           uuid,
-          params,
+          addUserContextHeadersToServerParams(params, sessionId, namespaceUuid),
           namespaceUuid,
         );
         if (!session) return;
@@ -680,7 +735,7 @@ export const createServer = async (
         const session = await mcpServerPool.getSession(
           sessionId,
           uuid,
-          params,
+          addUserContextHeadersToServerParams(params, sessionId, namespaceUuid),
           namespaceUuid,
         );
         if (!session) return;
@@ -811,7 +866,11 @@ export const createServer = async (
           const session = await mcpServerPool.getSession(
             sessionId,
             uuid,
-            params,
+            addUserContextHeadersToServerParams(
+              params,
+              sessionId,
+              namespaceUuid,
+            ),
             namespaceUuid,
           );
           if (!session) return;

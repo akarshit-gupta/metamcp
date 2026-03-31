@@ -90,9 +90,19 @@ export class McpServerPool {
       this.sessionTimestamps[sessionId] = Date.now();
     }
 
+    const hasForwardedUserHeaders = !!(
+      params.headers &&
+      (
+        params.headers["x-user-id"] ||
+        params.headers["x-user-email"] ||
+        params.headers["x-user-role"]
+      )
+    );
+
     // Check if we have an idle session for this server that we can convert
+    // If request has per-user forwarded headers, avoid idle reuse to prevent
     const idleClient = this.idleSessions[serverUuid];
-    if (idleClient) {
+    if (idleClient && !hasForwardedUserHeaders) {
       // Convert idle session to active session
       delete this.idleSessions[serverUuid];
       this.activeSessions[sessionId][serverUuid] = idleClient;

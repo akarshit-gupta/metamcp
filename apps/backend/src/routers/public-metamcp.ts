@@ -21,6 +21,9 @@ publicEndpointsRouter.use(
       "mcp-session-id",
       "Authorization",
       "X-API-Key",
+      "X-User-ID",
+      "X-User-Email",
+      "X-User-Role",
     ],
   }),
 );
