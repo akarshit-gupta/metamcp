@@ -3,10 +3,13 @@
 #
 # Local smoke test with Podman (no push): ./scripts/podman-build-local.sh
 #
-# Prerequisites (run once per session):
-#   export AWS_PROFILE=dbaas-app-staging
-#   aws-azure-login --no-sandbox --mode gui --profile "$AWS_PROFILE"
-#   # Select role: arn:aws:iam::582763096612:role/INFRA (or your deploy role)
+# Prerequisites:
+#   Authenticate your container engine to ECR before running (this script does not run aws login).
+#   Example:
+#     export AWS_PROFILE=dbaas-app-staging
+#     aws-azure-login ...  # if your org uses it
+#     aws ecr get-login-password --profile "$AWS_PROFILE" --region us-east-1 \\
+#       | podman login --username AWS --password-stdin 582763096612.dkr.ecr.us-east-1.amazonaws.com
 #
 # Usage:
 #   ./scripts/ecr-push-metamcp-dev.sh                    # VERSION = date + short git sha
@@ -14,7 +17,6 @@
 #   VERSION=1.2.3 ./scripts/ecr-push-metamcp-dev.sh
 #
 # Optional env:
-#   AWS_PROFILE (default: dbaas-app-staging)
 #   AWS_ACCOUNT_ID, AWS_REGION, ECR_REPOSITORY, IMAGE_NAME_PREFIX, DOCKERFILE, PLATFORM
 #   CONTAINER_CMD — "podman" or "docker" (default: podman if installed, else docker)
 
@@ -36,9 +38,6 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-AWS_PROFILE="${AWS_PROFILE:-dbaas-app-staging}"
-export AWS_PROFILE
-
 AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-582763096612}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 ECR_REPOSITORY="${ECR_REPOSITORY:-dbaas-ss-chat/metamcp}"
@@ -56,23 +55,7 @@ TAG="${IMAGE_NAME_PREFIX}-${VERSION}"
 ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${TAG}"
 
-echo "Using AWS_PROFILE=${AWS_PROFILE}"
-if ! aws sts get-caller-identity --profile "${AWS_PROFILE}" --region "${AWS_REGION}" --output text >/dev/null 2>&1; then
-  echo "Error: AWS CLI cannot use profile '${AWS_PROFILE}'." >&2
-  echo "  1. Log in (same terminal session):" >&2
-  echo "       export AWS_PROFILE=${AWS_PROFILE}" >&2
-  echo "       aws-azure-login --no-sandbox --mode gui --profile \"\${AWS_PROFILE}\"" >&2
-  echo "  2. Pick a role that can push to ECR in account ${AWS_ACCOUNT_ID}." >&2
-  echo "Underlying AWS error:" >&2
-  aws sts get-caller-identity --profile "${AWS_PROFILE}" --region "${AWS_REGION}" 2>&1 || true
-  exit 1
-fi
-
-echo "Using ${CONTAINER_CMD} for login, build, push"
-echo "Logging in to ECR ${ECR_REGISTRY} ..."
-aws ecr get-login-password --profile "${AWS_PROFILE}" --region "${AWS_REGION}" |
-  "${CONTAINER_CMD}" login --username AWS --password-stdin "${ECR_REGISTRY}"
-
+echo "Using ${CONTAINER_CMD} for build, push"
 echo "Building ${FULL_IMAGE} (platform=${PLATFORM}, Dockerfile=${DOCKERFILE}) ..."
 "${CONTAINER_CMD}" build \
   --platform "${PLATFORM}" \
