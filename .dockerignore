@@ -19,8 +19,7 @@ build
 .git
 .gitignore
 
-# Docker
-Dockerfile*
+# Docker (do not ignore Dockerfile: builder uses COPY . . and must invalidate when Dockerfile changes)
 docker-compose*.yml
 .dockerignore
 
