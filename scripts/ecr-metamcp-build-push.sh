@@ -8,11 +8,14 @@
 # Usage:
 #   ./scripts/ecr-metamcp-build-push.sh              # VERSION = UTC date + short git sha
 #   ./scripts/ecr-metamcp-build-push.sh 1.2.3
+#   ./scripts/ecr-metamcp-build-push.sh --no-cache   # full rebuild, no layer cache
+#   ./scripts/ecr-metamcp-build-push.sh --no-cache 1.2.3
 #   VERSION=1.2.3 ./scripts/ecr-metamcp-build-push.sh
 #
 # Optional env:
 #   AWS_PROFILE — laptop only; EC2 instance role: unset
 #   SKIP_ECR_LOGIN=1 — skip get-login-password | container login
+#   DOCKER_BUILD_NO_CACHE=1 — same as --no-cache (ignore BuildKit layer cache)
 #   CONTAINER_CMD — podman or docker
 #   PLATFORM, DOCKERFILE, AWS_ACCOUNT_ID, AWS_REGION, ECR_REPOSITORY, IMAGE_NAME_PREFIX
 
@@ -22,6 +25,20 @@ unalias docker 2>/dev/null || true
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+NO_CACHE=0
+[[ "${DOCKER_BUILD_NO_CACHE:-0}" == "1" ]] && NO_CACHE=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-cache)
+      NO_CACHE=1
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if [[ -n "${CONTAINER_CMD:-}" ]]; then
   :
@@ -41,7 +58,7 @@ IMAGE_NAME_PREFIX="${IMAGE_NAME_PREFIX:-MetaMCP-dev-custom}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 
-v="${VERSION:-${1:-}}"
+v="${VERSION:-${1:-}}" # remaining $1 after optional --no-cache flags
 if [[ -z "$v" ]]; then
   v="$(date -u +%Y%m%d-%H%M%S)-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo local)"
 fi
@@ -56,12 +73,17 @@ if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" && "${PLATFORM}" == 
 fi
 
 echo "Using ${CONTAINER_CMD} for build + push"
+if [[ "${NO_CACHE}" == "1" ]]; then
+  echo "Build: --no-cache (full rebuild, no layer cache)"
+fi
 echo "Building ${FULL_IMAGE} (platform=${PLATFORM}, Dockerfile=${DOCKERFILE}) ..."
-"${CONTAINER_CMD}" build \
-  --platform "${PLATFORM}" \
-  -f "${DOCKERFILE}" \
-  -t "${FULL_IMAGE}" \
-  .
+build_args=(
+  --platform "${PLATFORM}"
+  -f "${DOCKERFILE}"
+  -t "${FULL_IMAGE}"
+)
+[[ "${NO_CACHE}" == "1" ]] && build_args+=(--no-cache)
+"${CONTAINER_CMD}" build "${build_args[@]}" .
 
 if [[ "${SKIP_ECR_LOGIN:-0}" != "1" ]]; then
   echo "Logging in to ECR ${ECR_REGISTRY} ..."
