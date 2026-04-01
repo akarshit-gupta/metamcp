@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build MetaMCP image locally with Podman (no ECR push).
-# Use this to verify the Dockerfile before ./scripts/ecr-push-metamcp-dev.sh.
+# Use this to verify the Dockerfile before ./scripts/ecr-metamcp-build-push.sh.
 #
 # MetaMCP needs PostgreSQL at startup (see docker-entrypoint.sh). Easiest local loop:
 #   1. Start Postgres (e.g. docker compose up -d postgres from this repo, or any reachable DB).
