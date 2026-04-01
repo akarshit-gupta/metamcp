@@ -32,21 +32,19 @@ COPY packages/zod-types/package.json ./packages/zod-types/
 # Install dependencies
 RUN pnpm install --frozen-lockfile
 
-# Builder stage
-FROM base AS builder
+# Builder: extend deps in place. Copying only node_modules from deps into a fresh FROM base image
+# breaks pnpm's nested .pnpm layout (e.g. tsup cannot resolve tinyglobby).
+FROM deps AS builder
 WORKDIR /app
 
-# Copy node_modules from deps stage
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/apps/frontend/node_modules ./apps/frontend/node_modules
-COPY --from=deps /app/apps/backend/node_modules ./apps/backend/node_modules
-COPY --from=deps /app/packages ./packages
-
-# Copy source code
+# Overlay full source (.dockerignore excludes local node_modules / build artifacts)
 COPY . .
 
-# Build all packages and apps
-RUN pnpm build
+# Relink workspace to new files; keeps the same store created in deps
+RUN pnpm install --frozen-lockfile
+
+# pnpm on linux/amd64 often omits root `node_modules/.bin/turbo`; call the lockfile path.
+RUN node "$(find node_modules/.pnpm -path '*/turbo@*/node_modules/turbo/bin/turbo' -type f | head -1)" run build
 
 RUN sed -i -e "s/30000/600000/" \
     "node_modules/.pnpm/next@15.5.12_react-dom@19.1.2_react@19.1.2__react@19.1.2/node_modules/next/dist/server/lib/router-utils/proxy-request.js" \
