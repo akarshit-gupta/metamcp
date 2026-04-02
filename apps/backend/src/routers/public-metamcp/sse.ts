@@ -12,7 +12,9 @@ import logger from "@/utils/logger";
 
 import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-incoming-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
+import type { MetaMcpUserContext } from "../../lib/metamcp/user-context-store";
 import {
+  getUserContextForSession,
   removeUserContextForSession,
   setUserContextForNamespace,
   setUserContextForSession,
@@ -27,6 +29,45 @@ const getHeaderString = (
   if (!value) return undefined;
   return Array.isArray(value) ? value[0] : value;
 };
+
+/** LibreChat often sends literal {{LIBRECHAT_USER_*}} on SSE GET before substitution; POST /message has real values. */
+function isUnresolvedLibreChatPlaceholder(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes("{{") && value.includes("}}");
+}
+
+function userHeadersFromRequest(req: express.Request): {
+  userId?: string;
+  userEmail?: string;
+  userRole?: string;
+} {
+  const rawId = getHeaderString(req.headers["x-user-id"]);
+  const rawEmail = getHeaderString(req.headers["x-user-email"]);
+  const rawRole = getHeaderString(req.headers["x-user-role"]);
+  return {
+    userId: isUnresolvedLibreChatPlaceholder(rawId) ? undefined : rawId,
+    userEmail: isUnresolvedLibreChatPlaceholder(rawEmail) ? undefined : rawEmail,
+    userRole: isUnresolvedLibreChatPlaceholder(rawRole) ? undefined : rawRole,
+  };
+}
+
+function stripUnresolvedUserFields(ctx: MetaMcpUserContext): MetaMcpUserContext {
+  return {
+    ...ctx,
+    userId:
+      ctx.userId && !isUnresolvedLibreChatPlaceholder(ctx.userId)
+        ? ctx.userId
+        : undefined,
+    userEmail:
+      ctx.userEmail && !isUnresolvedLibreChatPlaceholder(ctx.userEmail)
+        ? ctx.userEmail
+        : undefined,
+    userRole:
+      ctx.userRole && !isUnresolvedLibreChatPlaceholder(ctx.userRole)
+        ? ctx.userRole
+        : undefined,
+  };
+}
 
 // Session lifetime manager for SSE sessions
 const sessionManager = new SessionLifetimeManagerImpl<Transport>("SSE");
@@ -89,17 +130,15 @@ sseRouter.get(
       logger.info("Created public endpoint SSE transport");
 
       const sessionId = webAppTransport.sessionId;
-      const userId = getHeaderString(req.headers["x-user-id"]);
-      const userEmail = getHeaderString(req.headers["x-user-email"]);
-      const userRole = getHeaderString(req.headers["x-user-role"]);
+      const { userId, userEmail, userRole } = userHeadersFromRequest(req);
 
-      const userContext = {
+      const userContext = stripUnresolvedUserFields({
         userId,
         userEmail,
         userRole,
         authMethod: authReq.authMethod,
         authenticatedUserId: authReq.oauthUserId || authReq.apiKeyUserId,
-      };
+      });
       setUserContextForSession(sessionId, userContext);
       setUserContextForNamespace(namespaceUuid, userContext);
 
@@ -140,8 +179,8 @@ sseRouter.post(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
-    // const authReq = req as ApiKeyAuthenticatedRequest;
-    // const { namespaceUuid, endpointName } = authReq;
+    const authReq = req as ApiKeyAuthenticatedRequest;
+    const { namespaceUuid } = authReq;
 
     try {
       const sessionId = req.query.sessionId;
@@ -157,6 +196,23 @@ sseRouter.post(
         res.status(404).end("Session not found");
         return;
       }
+
+      // LibreChat substitutes {{LIBRECHAT_USER_*}} on POST, not always on SSE GET — refresh context here.
+      const incoming = userHeadersFromRequest(req);
+      const prev = getUserContextForSession(sessionId as string);
+      const merged = stripUnresolvedUserFields({
+        userId: incoming.userId ?? prev?.userId,
+        userEmail: incoming.userEmail ?? prev?.userEmail,
+        userRole: incoming.userRole ?? prev?.userRole,
+        authMethod: authReq.authMethod ?? prev?.authMethod,
+        authenticatedUserId:
+          authReq.oauthUserId ||
+          authReq.apiKeyUserId ||
+          prev?.authenticatedUserId,
+      });
+      setUserContextForSession(sessionId as string, merged);
+      setUserContextForNamespace(namespaceUuid, merged);
+
       await transport.handlePostMessage(req, res);
     } catch (error) {
       logger.error("Error in public endpoint /message route:", error);
