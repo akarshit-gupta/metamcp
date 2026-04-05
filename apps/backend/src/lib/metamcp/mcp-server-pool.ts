@@ -6,6 +6,17 @@ import { configService } from "../config.service";
 import { ConnectedClient, connectMetaMcpClient } from "./client";
 import { serverErrorTracker } from "./server-error-tracker";
 
+/** Used to drop cached upstream connections when x-user-* context arrives or changes after the first connect. */
+function forwardUserHeadersFingerprint(
+  headers: Record<string, string> | null | undefined,
+): string {
+  if (!headers) return "";
+  const id = headers["x-user-id"] ?? "";
+  const email = headers["x-user-email"] ?? "";
+  const role = headers["x-user-role"] ?? "";
+  return `${id}\n${email}\n${role}`;
+}
+
 export interface McpServerPoolStatus {
   idle: number;
   active: number;
@@ -31,6 +42,12 @@ export class McpServerPool {
 
   // Server parameters cache: serverUuid -> ServerParameters
   private serverParamsCache: Record<string, ServerParameters> = {};
+
+  // sessionId -> serverUuid -> fingerprint of x-user-* used when the active connection was opened
+  private connectionUserFingerprints: Record<
+    string,
+    Record<string, string>
+  > = {};
 
   // Track ongoing idle session creation to prevent duplicates
   private creatingIdleSessions: Set<string> = new Set();
@@ -78,9 +95,31 @@ export class McpServerPool {
     // Update server params cache
     this.serverParamsCache[serverUuid] = params;
 
-    // Check if we already have an active session for this sessionId and server
-    if (this.activeSessions[sessionId]?.[serverUuid]) {
-      return this.activeSessions[sessionId][serverUuid];
+    const fp = forwardUserHeadersFingerprint(params.headers);
+
+    const existingClient = this.activeSessions[sessionId]?.[serverUuid];
+    if (existingClient) {
+      const storedFp =
+        this.connectionUserFingerprints[sessionId]?.[serverUuid] ?? "";
+      if (storedFp === fp) {
+        return existingClient;
+      }
+      logger.info(
+        `Reconnecting upstream MCP server ${serverUuid} for session ${sessionId}: forwarded user headers changed`,
+      );
+      try {
+        await existingClient.cleanup();
+      } catch (error) {
+        logger.error(
+          `Error cleaning up stale connection for ${serverUuid} (session ${sessionId}):`,
+          error,
+        );
+      }
+      delete this.activeSessions[sessionId][serverUuid];
+      if (this.connectionUserFingerprints[sessionId]) {
+        delete this.connectionUserFingerprints[sessionId][serverUuid];
+      }
+      this.sessionToServers[sessionId]?.delete(serverUuid);
     }
 
     // Initialize session if it doesn't exist
@@ -107,6 +146,10 @@ export class McpServerPool {
       delete this.idleSessions[serverUuid];
       this.activeSessions[sessionId][serverUuid] = idleClient;
       this.sessionToServers[sessionId].add(serverUuid);
+      if (!this.connectionUserFingerprints[sessionId]) {
+        this.connectionUserFingerprints[sessionId] = {};
+      }
+      this.connectionUserFingerprints[sessionId][serverUuid] = fp;
 
       logger.info(
         `Converted idle session to active for server ${serverUuid}, session ${sessionId}`,
@@ -126,6 +169,10 @@ export class McpServerPool {
 
     this.activeSessions[sessionId][serverUuid] = newClient;
     this.sessionToServers[sessionId].add(serverUuid);
+    if (!this.connectionUserFingerprints[sessionId]) {
+      this.connectionUserFingerprints[sessionId] = {};
+    }
+    this.connectionUserFingerprints[sessionId][serverUuid] = fp;
 
     logger.info(
       `Created new active session for server ${serverUuid}, session ${sessionId}`,
@@ -311,6 +358,8 @@ export class McpServerPool {
     // Remove from active sessions
     delete this.activeSessions[sessionId];
 
+    delete this.connectionUserFingerprints[sessionId];
+
     // Clean up session timestamp
     delete this.sessionTimestamps[sessionId];
 
@@ -353,6 +402,7 @@ export class McpServerPool {
     // Clear all state
     this.idleSessions = {};
     this.activeSessions = {};
+    this.connectionUserFingerprints = {};
     this.sessionToServers = {};
     this.sessionTimestamps = {};
     this.serverParamsCache = {};
@@ -628,6 +678,9 @@ export class McpServerPool {
           );
         }
         delete sessionServers[serverUuid];
+        if (this.connectionUserFingerprints[sessionId]) {
+          delete this.connectionUserFingerprints[sessionId][serverUuid];
+        }
         this.sessionToServers[sessionId]?.delete(serverUuid);
       }
     }

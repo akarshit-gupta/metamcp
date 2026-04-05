@@ -13,9 +13,61 @@ import logger from "@/utils/logger";
 
 import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-incoming-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
+import type { MetaMcpUserContext } from "../../lib/metamcp/user-context-store";
+import {
+  getUserContextForSession,
+  removeUserContextForSession,
+  setUserContextForNamespace,
+  setUserContextForSession,
+} from "../../lib/metamcp/user-context-store";
 import { SessionLifetimeManagerImpl } from "../../lib/session-lifetime-manager";
 
 const streamableHttpRouter = express.Router();
+
+const getHeaderString = (
+  value: string | string[] | undefined,
+): string | undefined => {
+  if (!value) return undefined;
+  return Array.isArray(value) ? value[0] : value;
+};
+
+function isUnresolvedLibreChatPlaceholder(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.includes("{{") && value.includes("}}");
+}
+
+function userHeadersFromRequest(req: express.Request): {
+  userId?: string;
+  userEmail?: string;
+  userRole?: string;
+} {
+  const rawId = getHeaderString(req.headers["x-user-id"]);
+  const rawEmail = getHeaderString(req.headers["x-user-email"]);
+  const rawRole = getHeaderString(req.headers["x-user-role"]);
+  return {
+    userId: isUnresolvedLibreChatPlaceholder(rawId) ? undefined : rawId,
+    userEmail: isUnresolvedLibreChatPlaceholder(rawEmail) ? undefined : rawEmail,
+    userRole: isUnresolvedLibreChatPlaceholder(rawRole) ? undefined : rawRole,
+  };
+}
+
+function stripUnresolvedUserFields(ctx: MetaMcpUserContext): MetaMcpUserContext {
+  return {
+    ...ctx,
+    userId:
+      ctx.userId && !isUnresolvedLibreChatPlaceholder(ctx.userId)
+        ? ctx.userId
+        : undefined,
+    userEmail:
+      ctx.userEmail && !isUnresolvedLibreChatPlaceholder(ctx.userEmail)
+        ? ctx.userEmail
+        : undefined,
+    userRole:
+      ctx.userRole && !isUnresolvedLibreChatPlaceholder(ctx.userRole)
+        ? ctx.userRole
+        : undefined,
+  };
+}
 
 // Session lifetime manager for StreamableHTTP sessions
 const sessionManager =
@@ -47,6 +99,7 @@ const cleanupSession = async (
 
     // Clean up MetaMCP server pool session
     await metaMcpServerPool.cleanupSession(sessionId);
+    removeUserContextForSession(sessionId);
 
     logger.info(`Session ${sessionId} cleanup completed successfully`);
   } catch (error) {
@@ -154,6 +207,17 @@ streamableHttpRouter.post(
           throw new Error("Failed to get MetaMCP server instance from pool");
         }
 
+        const { userId, userEmail, userRole } = userHeadersFromRequest(req);
+        const userContext = stripUnresolvedUserFields({
+          userId,
+          userEmail,
+          userRole,
+          authMethod: authReq.authMethod,
+          authenticatedUserId: authReq.oauthUserId || authReq.apiKeyUserId,
+        });
+        setUserContextForSession(newSessionId, userContext);
+        setUserContextForNamespace(namespaceUuid, userContext);
+
         logger.info(
           `Using MetaMCP server instance for public endpoint session ${newSessionId} (endpoint: ${endpointName})`,
         );
@@ -233,6 +297,21 @@ streamableHttpRouter.post(
             timestamp: new Date().toISOString(),
           });
         } else {
+          const incoming = userHeadersFromRequest(req);
+          const prev = getUserContextForSession(sessionId);
+          const merged = stripUnresolvedUserFields({
+            userId: incoming.userId ?? prev?.userId,
+            userEmail: incoming.userEmail ?? prev?.userEmail,
+            userRole: incoming.userRole ?? prev?.userRole,
+            authMethod: authReq.authMethod ?? prev?.authMethod,
+            authenticatedUserId:
+              authReq.oauthUserId ||
+              authReq.apiKeyUserId ||
+              prev?.authenticatedUserId,
+          });
+          setUserContextForSession(sessionId, merged);
+          setUserContextForNamespace(namespaceUuid, merged);
+
           logger.info(`Found session ${sessionId}, handling request`);
           await transport.handleRequest(req, res);
         }
