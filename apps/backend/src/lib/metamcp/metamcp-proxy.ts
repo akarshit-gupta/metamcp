@@ -464,6 +464,35 @@ export const createServer = async (
       throw new Error(`Server UUID not found for tool: ${name}`);
     }
 
+    // Always reconcile pool session with current user headers before calling.
+    // tools/list often runs before POST carries x-user-*; cached toolToClient would
+    // otherwise keep an upstream connection opened without those headers.
+    const serverParamsRecord = await getMcpServers(
+      namespaceUuid,
+      includeInactiveServers,
+    );
+    const baseServerParams = serverParamsRecord[serverUuid];
+    if (!baseServerParams) {
+      throw new Error(`MCP server ${serverUuid} not found for tool: ${name}`);
+    }
+    const refreshedSession = await mcpServerPool.getSession(
+      sessionId,
+      serverUuid,
+      addUserContextHeadersToServerParams(
+        baseServerParams,
+        sessionId,
+        namespaceUuid,
+      ),
+      namespaceUuid,
+    );
+    if (!refreshedSession) {
+      throw new Error(
+        `No active MCP session for server ${baseServerParams.name || serverUuid}`,
+      );
+    }
+    clientForTool = refreshedSession;
+    toolToClient[name] = refreshedSession;
+
     try {
       const abortController = new AbortController();
 
