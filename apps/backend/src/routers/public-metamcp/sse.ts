@@ -10,9 +10,11 @@ import { lookupEndpoint } from "@/middleware/lookup-endpoint-middleware";
 import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
-import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-incoming-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
-import type { MetaMcpUserContext } from "../../lib/metamcp/user-context-store";
+import {
+  stripUnresolvedUserFields,
+  userHeadersFromRequest,
+} from "../../lib/metamcp/public-user-headers";
 import {
   getUserContextForSession,
   removeUserContextForSession,
@@ -22,52 +24,6 @@ import {
 import { SessionLifetimeManagerImpl } from "../../lib/session-lifetime-manager";
 
 const sseRouter = express.Router();
-
-const getHeaderString = (
-  value: string | string[] | undefined,
-): string | undefined => {
-  if (!value) return undefined;
-  return Array.isArray(value) ? value[0] : value;
-};
-
-/** LibreChat often sends literal {{LIBRECHAT_USER_*}} on SSE GET before substitution; POST /message has real values. */
-function isUnresolvedLibreChatPlaceholder(value: string | undefined): boolean {
-  if (!value) return false;
-  return value.includes("{{") && value.includes("}}");
-}
-
-function userHeadersFromRequest(req: express.Request): {
-  userId?: string;
-  userEmail?: string;
-  userRole?: string;
-} {
-  const rawId = getHeaderString(req.headers["x-user-id"]);
-  const rawEmail = getHeaderString(req.headers["x-user-email"]);
-  const rawRole = getHeaderString(req.headers["x-user-role"]);
-  return {
-    userId: isUnresolvedLibreChatPlaceholder(rawId) ? undefined : rawId,
-    userEmail: isUnresolvedLibreChatPlaceholder(rawEmail) ? undefined : rawEmail,
-    userRole: isUnresolvedLibreChatPlaceholder(rawRole) ? undefined : rawRole,
-  };
-}
-
-function stripUnresolvedUserFields(ctx: MetaMcpUserContext): MetaMcpUserContext {
-  return {
-    ...ctx,
-    userId:
-      ctx.userId && !isUnresolvedLibreChatPlaceholder(ctx.userId)
-        ? ctx.userId
-        : undefined,
-    userEmail:
-      ctx.userEmail && !isUnresolvedLibreChatPlaceholder(ctx.userEmail)
-        ? ctx.userEmail
-        : undefined,
-    userRole:
-      ctx.userRole && !isUnresolvedLibreChatPlaceholder(ctx.userRole)
-        ? ctx.userRole
-        : undefined,
-  };
-}
 
 // Session lifetime manager for SSE sessions
 const sessionManager = new SessionLifetimeManagerImpl<Transport>("SSE");
@@ -115,10 +71,6 @@ sseRouter.get(
     const { namespaceUuid, endpointName } = authReq;
 
     try {
-      logIncomingPublicMetamcpHeaders(
-        req,
-        `public-metamcp SSE GET /${endpointName}/sse`,
-      );
       logger.info(
         `New public endpoint SSE connection request for ${endpointName} -> namespace ${namespaceUuid}`,
       );
@@ -184,10 +136,6 @@ sseRouter.post(
 
     try {
       const sessionId = req.query.sessionId;
-      logIncomingPublicMetamcpHeaders(
-        req,
-        `public-metamcp SSE POST /message sessionId=${String(sessionId ?? "")}`,
-      );
 
       const transport = sessionManager.getSession(
         sessionId as string,

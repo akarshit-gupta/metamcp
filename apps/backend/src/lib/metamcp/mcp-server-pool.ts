@@ -104,7 +104,7 @@ export class McpServerPool {
       if (storedFp === fp) {
         return existingClient;
       }
-      logger.info(
+      logger.debug(
         `Reconnecting upstream MCP server ${serverUuid} for session ${sessionId}: forwarded user headers changed`,
       );
       try {
@@ -138,8 +138,8 @@ export class McpServerPool {
       )
     );
 
-    // Check if we have an idle session for this server that we can convert
-    // If request has per-user forwarded headers, avoid idle reuse to prevent
+    // Check if we have an idle session for this server that we can convert.
+    // Do not reuse idle connections when forwarding per-user x-user-* headers.
     const idleClient = this.idleSessions[serverUuid];
     if (idleClient && !hasForwardedUserHeaders) {
       // Convert idle session to active session

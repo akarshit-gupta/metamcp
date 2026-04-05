@@ -257,11 +257,11 @@ export const connectMetaMcpClient = async (
       if (transport) {
         try {
           await transport.close();
-          console.log(
+          logger.debug(
             `Cleaned up transport for failed connection to ${serverParams.name} (${serverParams.uuid})`,
           );
         } catch (cleanupError) {
-          console.error(
+          logger.error(
             `Error cleaning up transport for ${serverParams.name} (${serverParams.uuid}):`,
             cleanupError,
           );

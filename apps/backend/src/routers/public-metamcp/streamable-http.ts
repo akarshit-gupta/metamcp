@@ -11,9 +11,11 @@ import { lookupEndpoint } from "@/middleware/lookup-endpoint-middleware";
 import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
-import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-incoming-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
-import type { MetaMcpUserContext } from "../../lib/metamcp/user-context-store";
+import {
+  stripUnresolvedUserFields,
+  userHeadersFromRequest,
+} from "../../lib/metamcp/public-user-headers";
 import {
   getUserContextForSession,
   removeUserContextForSession,
@@ -23,51 +25,6 @@ import {
 import { SessionLifetimeManagerImpl } from "../../lib/session-lifetime-manager";
 
 const streamableHttpRouter = express.Router();
-
-const getHeaderString = (
-  value: string | string[] | undefined,
-): string | undefined => {
-  if (!value) return undefined;
-  return Array.isArray(value) ? value[0] : value;
-};
-
-function isUnresolvedLibreChatPlaceholder(value: string | undefined): boolean {
-  if (!value) return false;
-  return value.includes("{{") && value.includes("}}");
-}
-
-function userHeadersFromRequest(req: express.Request): {
-  userId?: string;
-  userEmail?: string;
-  userRole?: string;
-} {
-  const rawId = getHeaderString(req.headers["x-user-id"]);
-  const rawEmail = getHeaderString(req.headers["x-user-email"]);
-  const rawRole = getHeaderString(req.headers["x-user-role"]);
-  return {
-    userId: isUnresolvedLibreChatPlaceholder(rawId) ? undefined : rawId,
-    userEmail: isUnresolvedLibreChatPlaceholder(rawEmail) ? undefined : rawEmail,
-    userRole: isUnresolvedLibreChatPlaceholder(rawRole) ? undefined : rawRole,
-  };
-}
-
-function stripUnresolvedUserFields(ctx: MetaMcpUserContext): MetaMcpUserContext {
-  return {
-    ...ctx,
-    userId:
-      ctx.userId && !isUnresolvedLibreChatPlaceholder(ctx.userId)
-        ? ctx.userId
-        : undefined,
-    userEmail:
-      ctx.userEmail && !isUnresolvedLibreChatPlaceholder(ctx.userEmail)
-        ? ctx.userEmail
-        : undefined,
-    userRole:
-      ctx.userRole && !isUnresolvedLibreChatPlaceholder(ctx.userRole)
-        ? ctx.userRole
-        : undefined,
-  };
-}
 
 // Session lifetime manager for StreamableHTTP sessions
 const sessionManager =
@@ -137,11 +94,6 @@ streamableHttpRouter.get(
     // const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string;
 
-    logIncomingPublicMetamcpHeaders(
-      req,
-      `public-metamcp streamable GET /mcp mcp-session-id=${sessionId ?? ""}`,
-    );
-
     // logger.info(
     //   `Received GET message for public endpoint ${endpointName} -> namespace ${namespaceUuid} sessionId ${sessionId}`,
     // );
@@ -175,11 +127,6 @@ streamableHttpRouter.post(
     const authReq = req as ApiKeyAuthenticatedRequest;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-    logIncomingPublicMetamcpHeaders(
-      req,
-      `public-metamcp streamable POST /${endpointName}/mcp session=${sessionId ?? "new"}`,
-    );
 
     // Log authentication information for debugging
     logger.info(`POST /mcp request for endpoint: ${endpointName}`);
@@ -341,11 +288,6 @@ streamableHttpRouter.delete(
     const authReq = req as ApiKeyAuthenticatedRequest;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-    logIncomingPublicMetamcpHeaders(
-      req,
-      `public-metamcp streamable DELETE /${endpointName}/mcp session=${sessionId ?? ""}`,
-    );
 
     logger.info(
       `Received DELETE message for public endpoint ${endpointName} -> namespace ${namespaceUuid} sessionId ${sessionId}`,

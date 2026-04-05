@@ -180,11 +180,6 @@ export const createServer = async (
     request,
     context,
   ) => {
-    console.log(
-      "[DEBUG-TOOLS] 🔍 tools/list called for namespace:",
-      namespaceUuid,
-    );
-    const startTime = performance.now();
     const serverParams = await getMcpServers(
       context.namespaceUuid,
       includeInactiveServers,
@@ -197,19 +192,10 @@ export const createServer = async (
     // We'll filter servers during processing after getting sessions to check actual MCP server names
     const allServerEntries = Object.entries(serverParams);
 
-    console.log(
-      `[DEBUG-TOOLS] 📋 Processing ${allServerEntries.length} servers`,
-    );
-
     await Promise.allSettled(
       allServerEntries.map(async ([mcpServerUuid, params]) => {
-        console.log(`[DEBUG-TOOLS] 🔧 Server: ${params.name || mcpServerUuid}`);
-
         // Skip if we've already visited this server to prevent circular references
         if (visitedServers.has(mcpServerUuid)) {
-          console.log(
-            `[DEBUG-TOOLS] ⏭️  Skipping already visited: ${params.name}`,
-          );
           return;
         }
         const session = await mcpServerPool.getSession(
@@ -223,7 +209,6 @@ export const createServer = async (
           namespaceUuid,
         );
         if (!session) {
-          console.log(`[DEBUG-TOOLS] ❌ No session for: ${params.name}`);
           return;
         }
 
@@ -259,7 +244,6 @@ export const createServer = async (
           const allServerTools: Tool[] = [];
           let cursor: string | undefined = undefined;
           let hasMore = true;
-          const toolFetchStart = performance.now();
 
           while (hasMore) {
             const result: z.infer<typeof ListToolsResultSchema> =
@@ -282,10 +266,6 @@ export const createServer = async (
             hasMore = !!result.nextCursor;
           }
 
-          console.log(
-            `[DEBUG-TOOLS] ⏱️  Fetched ${allServerTools.length} tools from ${serverName} in ${(performance.now() - toolFetchStart).toFixed(2)}ms`,
-          );
-
           // Save original tools to database (before middleware processing)
           // This ensures we only save the actual tool names, not override names
           // Filter out tools that are overrides of existing tools to prevent duplicates
@@ -295,10 +275,6 @@ export const createServer = async (
             const hasChanged = toolsSyncCache.hasChanged(
               mcpServerUuid,
               toolNames,
-            );
-
-            console.log(
-              `[DEBUG-TOOLS] 🔍 Hash check for ${serverName}: ${hasChanged ? "CHANGED" : "UNCHANGED"}`,
             );
 
             if (hasChanged) {
@@ -344,11 +320,6 @@ export const createServer = async (
           logger.error(`Error fetching tools from: ${serverName}`, error);
         }
       }),
-    );
-
-    const totalTime = performance.now() - startTime;
-    console.log(
-      `[DEBUG-TOOLS] ✅ tools/list completed in ${totalTime.toFixed(2)}ms, returning ${allTools.length} tools`,
     );
 
     return { tools: allTools };
@@ -512,13 +483,6 @@ export const createServer = async (
       const userContext =
         getUserContextForSession(sessionId) ||
         getUserContextForNamespace(namespaceUuid);
-      logger.info("Forwarding tool call with MetaMCP user context", {
-        sessionId,
-        toolName: name,
-        originalToolName,
-        hasUserContext: !!userContext,
-        userContext,
-      });
       const result = await clientForTool.client.request(
         {
           method: "tools/call",
