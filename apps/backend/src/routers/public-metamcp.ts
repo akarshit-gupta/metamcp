@@ -24,7 +24,7 @@ publicEndpointsRouter.use(
       "X-User-ID",
       "X-User-Email",
       "X-User-Role",
-      "X-User-Group",
+      "X-User-Groups",
     ],
   }),
 );
