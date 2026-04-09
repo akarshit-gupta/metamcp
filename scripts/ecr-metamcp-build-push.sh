@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Build MetaMCP Docker image and push to AWS ECR in one run (single tag for build + push).
 #
+# EKS (linux/amd64 workers): the image MUST be linux/amd64. Apple Silicon defaults to arm64
+# if you run a plain `docker build` without platform — pods then exit 255 on amd64 nodes.
+# This script defaults PLATFORM=linux/amd64 and uses Docker Buildx when available so
+# --platform is applied correctly for cross-builds.
+#
 # Prerequisites:
 #   EC2: IAM role with ECR push; leave AWS_PROFILE unset. aws sts get-caller-identity
 #   Laptop: ./scripts/ecr-metamcp-aws-login.sh first (or Azure login), then export AWS_PROFILE if needed.
@@ -14,10 +19,14 @@
 #
 # Optional env:
 #   AWS_PROFILE — laptop only; EC2 instance role: unset
-#   SKIP_ECR_LOGIN=1 — skip get-login-password | container login
+#   SKIP_ECR_LOGIN=1 — skip get-login-password | container login (not for first ECR push)
 #   DOCKER_BUILD_NO_CACHE=1 — same as --no-cache (ignore BuildKit layer cache)
-#   CONTAINER_CMD — podman or docker
-#   PLATFORM, DOCKERFILE, AWS_ACCOUNT_ID, AWS_REGION, ECR_REPOSITORY, IMAGE_NAME_PREFIX
+#   CONTAINER_CMD — force podman or docker (default: podman if found, else docker)
+#   PLATFORM — default linux/amd64 (EKS x86). Use linux/arm64 only for arm64-only clusters.
+#   DOCKERFILE, AWS_ACCOUNT_ID, AWS_REGION, ECR_REPOSITORY, IMAGE_NAME_PREFIX
+#
+# After push, verify architecture:
+#   docker buildx imagetools inspect <full-image-uri>
 
 set -euo pipefail
 
@@ -68,7 +77,9 @@ ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${TAG}"
 
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" && "${PLATFORM}" == "linux/amd64" ]]; then
-  echo "Note: linux/amd64 on Apple Silicon is emulated; esbuild may fail during build. Use EC2 or PLATFORM=linux/arm64 (arm64 clusters only)." >&2
+  echo "Note: Building linux/amd64 on Apple Silicon (qemu/binfmt). If the build fails in esbuild/tsup," >&2
+  echo "      build on an linux/amd64 host (e.g. EC2) or use a remote buildx builder. Do not push a plain" >&2
+  echo "      local arm64 image to EKS amd64 nodes — pods will exit 255." >&2
   echo "" >&2
 fi
 
@@ -77,27 +88,62 @@ if [[ "${NO_CACHE}" == "1" ]]; then
   echo "Build: --no-cache (full rebuild, no layer cache)"
 fi
 echo "Building ${FULL_IMAGE} (platform=${PLATFORM}, Dockerfile=${DOCKERFILE}) ..."
-build_args=(
-  --platform "${PLATFORM}"
-  -f "${DOCKERFILE}"
-  -t "${FULL_IMAGE}"
-)
-[[ "${NO_CACHE}" == "1" ]] && build_args+=(--no-cache)
-"${CONTAINER_CMD}" build "${build_args[@]}" .
 
-if [[ "${SKIP_ECR_LOGIN:-0}" != "1" ]]; then
-  echo "Logging in to ECR ${ECR_REGISTRY} ..."
-  if [[ -n "${AWS_PROFILE:-}" ]]; then
-    export AWS_PROFILE
+ecr_login() {
+  if [[ "${SKIP_ECR_LOGIN:-0}" != "1" ]]; then
+    echo "Logging in to ECR ${ECR_REGISTRY} ..."
+    if [[ -n "${AWS_PROFILE:-}" ]]; then
+      export AWS_PROFILE
+    fi
+    aws ecr get-login-password --region "${AWS_REGION}" |
+      "${CONTAINER_CMD}" login --username AWS --password-stdin "${ECR_REGISTRY}"
   fi
-  aws ecr get-login-password --region "${AWS_REGION}" |
-    "${CONTAINER_CMD}" login --username AWS --password-stdin "${ECR_REGISTRY}"
+}
+
+# Docker: prefer buildx + --push so --platform is honored (critical for Mac ARM -> EKS amd64).
+use_docker_buildx=0
+if [[ "${CONTAINER_CMD}" == "docker" ]] && docker buildx version &>/dev/null; then
+  use_docker_buildx=1
 fi
 
-echo "Pushing ${FULL_IMAGE} ..."
-"${CONTAINER_CMD}" push "${FULL_IMAGE}"
+if [[ "${use_docker_buildx}" == "1" ]]; then
+  export DOCKER_BUILDKIT=1
+  ecr_login
+  bx_args=(
+    buildx build
+    --platform "${PLATFORM}"
+    -f "${DOCKERFILE}"
+    -t "${FULL_IMAGE}"
+    --provenance=false
+    --sbom=false
+    --push
+  )
+  [[ "${NO_CACHE}" == "1" ]] && bx_args+=(--no-cache)
+  bx_args+=(.)
+  docker "${bx_args[@]}"
+else
+  if [[ "${CONTAINER_CMD}" == "docker" ]]; then
+    export DOCKER_BUILDKIT=1
+    echo "Warning: docker buildx not found; using docker build. Ensure Docker 20+ and BuildKit for reliable --platform." >&2
+  fi
+  build_args=(
+    --platform "${PLATFORM}"
+    -f "${DOCKERFILE}"
+    -t "${FULL_IMAGE}"
+  )
+  [[ "${NO_CACHE}" == "1" ]] && build_args+=(--no-cache)
+  build_args+=(.)
+  "${CONTAINER_CMD}" build "${build_args[@]}"
+  ecr_login
+  echo "Pushing ${FULL_IMAGE} ..."
+  "${CONTAINER_CMD}" push "${FULL_IMAGE}"
+fi
 
 echo "Done. Helm/K8s tag:"
 echo "  tag: ${TAG}"
 echo "Full URI:"
 echo "  ${FULL_IMAGE}"
+if [[ "${use_docker_buildx}" == "1" ]]; then
+  echo "Verify manifest platform (expect ${PLATFORM}):"
+  echo "  docker buildx imagetools inspect ${FULL_IMAGE}"
+fi
