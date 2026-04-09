@@ -10,6 +10,7 @@ import { lookupEndpoint } from "@/middleware/lookup-endpoint-middleware";
 import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
+import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-incoming-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
 import {
   stripUnresolvedUserFields,
@@ -71,6 +72,10 @@ sseRouter.get(
     const { namespaceUuid, endpointName } = authReq;
 
     try {
+      logIncomingPublicMetamcpHeaders(
+        req,
+        `SSE GET /${endpointName}/sse`,
+      );
       logger.info(
         `New public endpoint SSE connection request for ${endpointName} -> namespace ${namespaceUuid}`,
       );
@@ -136,6 +141,10 @@ sseRouter.post(
 
     try {
       const sessionId = req.query.sessionId;
+      logIncomingPublicMetamcpHeaders(
+        req,
+        `SSE POST /message sessionId=${String(sessionId ?? "")}`,
+      );
 
       const transport = sessionManager.getSession(
         sessionId as string,
