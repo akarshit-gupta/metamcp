@@ -77,6 +77,9 @@ const addUserContextHeadersToServerParams = (
       ...(userContext.userRole
         ? { "x-user-role": userContext.userRole }
         : {}),
+      ...(userContext.userGroups
+        ? { "x-user-groups": userContext.userGroups }
+        : {}),
     },
   };
 };

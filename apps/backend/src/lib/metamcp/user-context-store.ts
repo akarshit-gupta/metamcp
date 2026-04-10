@@ -2,6 +2,8 @@ export interface MetaMcpUserContext {
   userId?: string;
   userEmail?: string;
   userRole?: string;
+  /** From X-User-Groups (e.g. comma-separated group ids from LibreChat). */
+  userGroups?: string;
   authMethod?: "api_key" | "oauth";
   authenticatedUserId?: string;
 }

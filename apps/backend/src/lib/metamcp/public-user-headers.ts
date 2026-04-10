@@ -19,14 +19,19 @@ export function userHeadersFromRequest(req: Request): {
   userId?: string;
   userEmail?: string;
   userRole?: string;
+  userGroups?: string;
 } {
   const rawId = getHeaderString(req.headers["x-user-id"]);
   const rawEmail = getHeaderString(req.headers["x-user-email"]);
   const rawRole = getHeaderString(req.headers["x-user-role"]);
+  const rawGroups = getHeaderString(req.headers["x-user-groups"]);
   return {
     userId: isUnresolvedLibreChatPlaceholder(rawId) ? undefined : rawId,
     userEmail: isUnresolvedLibreChatPlaceholder(rawEmail) ? undefined : rawEmail,
     userRole: isUnresolvedLibreChatPlaceholder(rawRole) ? undefined : rawRole,
+    userGroups: isUnresolvedLibreChatPlaceholder(rawGroups)
+      ? undefined
+      : rawGroups,
   };
 }
 
@@ -46,6 +51,10 @@ export function stripUnresolvedUserFields(
     userRole:
       ctx.userRole && !isUnresolvedLibreChatPlaceholder(ctx.userRole)
         ? ctx.userRole
+        : undefined,
+    userGroups:
+      ctx.userGroups && !isUnresolvedLibreChatPlaceholder(ctx.userGroups)
+        ? ctx.userGroups
         : undefined,
   };
 }

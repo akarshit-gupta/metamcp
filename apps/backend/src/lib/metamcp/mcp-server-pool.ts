@@ -14,7 +14,8 @@ function forwardUserHeadersFingerprint(
   const id = headers["x-user-id"] ?? "";
   const email = headers["x-user-email"] ?? "";
   const role = headers["x-user-role"] ?? "";
-  return `${id}\n${email}\n${role}`;
+  const groups = headers["x-user-groups"] ?? "";
+  return `${id}\n${email}\n${role}\n${groups}`;
 }
 
 export interface McpServerPoolStatus {
@@ -134,7 +135,8 @@ export class McpServerPool {
       (
         params.headers["x-user-id"] ||
         params.headers["x-user-email"] ||
-        params.headers["x-user-role"]
+        params.headers["x-user-role"] ||
+        params.headers["x-user-groups"]
       )
     );
 
