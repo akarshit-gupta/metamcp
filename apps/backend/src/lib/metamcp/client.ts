@@ -8,6 +8,7 @@ import { ServerParameters } from "@repo/zod-types";
 import logger from "@/utils/logger";
 
 import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed-transport";
+import { logForwardedMcpHeaders } from "./log-header-debug";
 import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
 import { resolveEnvVariables } from "./utils";
@@ -92,6 +93,10 @@ export const createMetaMcpClient = (
     if (authToken) {
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+    logForwardedMcpHeaders(
+      `${serverParams.name} (${serverParams.uuid}) type=SSE url=${transformedUrl}`,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 
@@ -122,6 +127,10 @@ export const createMetaMcpClient = (
     if (authToken) {
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+    logForwardedMcpHeaders(
+      `${serverParams.name} (${serverParams.uuid}) type=STREAMABLE_HTTP url=${transformedUrl}`,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 

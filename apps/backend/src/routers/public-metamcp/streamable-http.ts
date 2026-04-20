@@ -11,6 +11,7 @@ import { lookupEndpoint } from "@/middleware/lookup-endpoint-middleware";
 import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
+import { logIncomingPublicMetamcpHeaders } from "../../lib/metamcp/log-header-debug";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
 import {
   stripUnresolvedUserFields,
@@ -93,6 +94,10 @@ streamableHttpRouter.get(
     // const authReq = req as ApiKeyAuthenticatedRequest;
     // const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string;
+    logIncomingPublicMetamcpHeaders(
+      req,
+      `streamable GET /mcp mcp-session-id=${sessionId ?? ""}`,
+    );
 
     // logger.info(
     //   `Received GET message for public endpoint ${endpointName} -> namespace ${namespaceUuid} sessionId ${sessionId}`,
@@ -127,6 +132,10 @@ streamableHttpRouter.post(
     const authReq = req as ApiKeyAuthenticatedRequest;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    logIncomingPublicMetamcpHeaders(
+      req,
+      `streamable POST /${endpointName}/mcp session=${sessionId ?? "new"}`,
+    );
 
     // Log authentication information for debugging
     logger.info(`POST /mcp request for endpoint: ${endpointName}`);
@@ -291,6 +300,10 @@ streamableHttpRouter.delete(
     const authReq = req as ApiKeyAuthenticatedRequest;
     const { namespaceUuid, endpointName } = authReq;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    logIncomingPublicMetamcpHeaders(
+      req,
+      `streamable DELETE /${endpointName}/mcp session=${sessionId ?? ""}`,
+    );
 
     logger.info(
       `Received DELETE message for public endpoint ${endpointName} -> namespace ${namespaceUuid} sessionId ${sessionId}`,
