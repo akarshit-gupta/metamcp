@@ -10,6 +10,11 @@ import { lookupEndpoint } from "@/middleware/lookup-endpoint-middleware";
 import { rateLimitMiddleware } from "@/middleware/rate-limit.middleware";
 import logger from "@/utils/logger";
 
+import {
+  clearPublicForwardHeadersSession,
+  onPublicSseGet,
+  onPublicSseMessage,
+} from "../../lib/metamcp/forward-headers";
 import { metaMcpServerPool } from "../../lib/metamcp/metamcp-server-pool";
 import { SessionLifetimeManagerImpl } from "../../lib/session-lifetime-manager";
 
@@ -40,11 +45,14 @@ const cleanupSession = async (sessionId: string, transport?: Transport) => {
     // Clean up MetaMCP server pool session
     await metaMcpServerPool.cleanupSession(sessionId);
 
+    clearPublicForwardHeadersSession(sessionId);
+
     logger.info(`Session ${sessionId} cleanup completed successfully`);
   } catch (error) {
     logger.error(`Error during cleanup of session ${sessionId}:`, error);
     // Even if cleanup fails, remove the session from manager to prevent memory leaks
     sessionManager.removeSession(sessionId);
+    clearPublicForwardHeadersSession(sessionId);
     logger.info(`Removed orphaned session ${sessionId} due to cleanup error`);
     throw error;
   }
@@ -59,6 +67,7 @@ sseRouter.get(
     const authReq = req as ApiKeyAuthenticatedRequest;
     const { namespaceUuid, endpointName } = authReq;
 
+    let sessionId: string | undefined;
     try {
       logger.info(
         `New public endpoint SSE connection request for ${endpointName} -> namespace ${namespaceUuid}`,
@@ -70,7 +79,9 @@ sseRouter.get(
       );
       logger.info("Created public endpoint SSE transport");
 
-      const sessionId = webAppTransport.sessionId;
+      sessionId = webAppTransport.sessionId;
+
+      onPublicSseGet(sessionId, endpointName, req.headers);
 
       // Get or create MetaMCP server instance from the pool
       const mcpServerInstance = await metaMcpServerPool.getServer(
@@ -97,6 +108,9 @@ sseRouter.get(
 
       await mcpServerInstance.server.connect(webAppTransport);
     } catch (error) {
+      if (sessionId) {
+        clearPublicForwardHeadersSession(sessionId);
+      }
       logger.error("Error in public endpoint /sse route:", error);
       res.status(500).json(error);
     }
@@ -109,8 +123,7 @@ sseRouter.post(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
-    // const authReq = req as ApiKeyAuthenticatedRequest;
-    // const { namespaceUuid, endpointName } = authReq;
+    const authReq = req as ApiKeyAuthenticatedRequest;
 
     try {
       const sessionId = req.query.sessionId;
@@ -125,6 +138,11 @@ sseRouter.post(
         res.status(404).end("Session not found");
         return;
       }
+
+      if (typeof sessionId === "string") {
+        onPublicSseMessage(sessionId, authReq.endpointName, req.headers);
+      }
+
       await transport.handlePostMessage(req, res);
     } catch (error) {
       logger.error("Error in public endpoint /message route:", error);

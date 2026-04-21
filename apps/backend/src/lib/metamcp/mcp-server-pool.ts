@@ -3,7 +3,15 @@ import { ServerParameters } from "@repo/zod-types";
 import logger from "@/utils/logger";
 
 import { configService } from "../config.service";
-import { ConnectedClient, connectMetaMcpClient } from "./client";
+import {
+  type CreateMetaMcpClientOptions,
+  ConnectedClient,
+  connectMetaMcpClient,
+} from "./client";
+import {
+  getSseForwardSnapshotForSession,
+  shouldBypassSseIdlePool,
+} from "./forward-headers";
 import { serverErrorTracker } from "./server-error-tracker";
 
 export interface McpServerPoolStatus {
@@ -90,26 +98,39 @@ export class McpServerPool {
       this.sessionTimestamps[sessionId] = Date.now();
     }
 
+    const bypassIdle = shouldBypassSseIdlePool(params);
+    const forwardSnap = getSseForwardSnapshotForSession(sessionId);
+    const connectOptions: CreateMetaMcpClientOptions | undefined =
+      params.type === "SSE" && forwardSnap
+        ? { sseForwardHeaders: forwardSnap }
+        : undefined;
+
     // Check if we have an idle session for this server that we can convert
-    const idleClient = this.idleSessions[serverUuid];
-    if (idleClient) {
-      // Convert idle session to active session
-      delete this.idleSessions[serverUuid];
-      this.activeSessions[sessionId][serverUuid] = idleClient;
-      this.sessionToServers[sessionId].add(serverUuid);
+    if (!bypassIdle) {
+      const idleClient = this.idleSessions[serverUuid];
+      if (idleClient) {
+        // Convert idle session to active session
+        delete this.idleSessions[serverUuid];
+        this.activeSessions[sessionId][serverUuid] = idleClient;
+        this.sessionToServers[sessionId].add(serverUuid);
 
-      logger.info(
-        `Converted idle session to active for server ${serverUuid}, session ${sessionId}`,
-      );
+        logger.info(
+          `Converted idle session to active for server ${serverUuid}, session ${sessionId}`,
+        );
 
-      // Create a new idle session to replace the one we just used (ASYNC - NON-BLOCKING)
-      this.createIdleSessionAsync(serverUuid, params, namespaceUuid);
+        // Create a new idle session to replace the one we just used (ASYNC - NON-BLOCKING)
+        this.createIdleSessionAsync(serverUuid, params, namespaceUuid);
 
-      return idleClient;
+        return idleClient;
+      }
     }
 
     // No idle session available, create a new connection
-    const newClient = await this.createNewConnection(params, namespaceUuid);
+    const newClient = await this.createNewConnection(
+      params,
+      namespaceUuid,
+      connectOptions,
+    );
     if (!newClient) {
       return undefined;
     }
@@ -122,7 +143,9 @@ export class McpServerPool {
     );
 
     // Also create an idle session for future use (ASYNC - NON-BLOCKING)
-    this.createIdleSessionAsync(serverUuid, params, namespaceUuid);
+    if (!bypassIdle) {
+      this.createIdleSessionAsync(serverUuid, params, namespaceUuid);
+    }
 
     return newClient;
   }
@@ -133,6 +156,7 @@ export class McpServerPool {
   private async createNewConnection(
     params: ServerParameters,
     namespaceUuid?: string,
+    connectOptions?: CreateMetaMcpClientOptions,
   ): Promise<ConnectedClient | undefined> {
     // Check connection limit before attempting to create
     if (!this.canCreateConnection()) {
@@ -181,6 +205,7 @@ export class McpServerPool {
           });
         }
       },
+      connectOptions,
     );
     if (!connectedClient) {
       return undefined;
@@ -197,6 +222,10 @@ export class McpServerPool {
     params: ServerParameters,
     namespaceUuid?: string,
   ): Promise<void> {
+    if (shouldBypassSseIdlePool(params)) {
+      return;
+    }
+
     // Don't create if we already have an idle session for this server
     if (this.idleSessions[serverUuid]) {
       return;
@@ -217,6 +246,10 @@ export class McpServerPool {
     params: ServerParameters,
     namespaceUuid?: string,
   ): void {
+    if (shouldBypassSseIdlePool(params)) {
+      return;
+    }
+
     // Don't create if we already have an idle session or are already creating one
     if (
       this.idleSessions[serverUuid] ||
@@ -273,6 +306,9 @@ export class McpServerPool {
   ): Promise<void> {
     const promises = Object.entries(serverParams).map(
       async ([uuid, params]) => {
+        if (shouldBypassSseIdlePool(params)) {
+          return;
+        }
         if (!this.idleSessions[uuid]) {
           await this.createIdleSession(uuid, params, namespaceUuid);
         }
@@ -310,7 +346,7 @@ export class McpServerPool {
       // For each server this session was using, create new idle sessions if needed (ASYNC - NON-BLOCKING)
       Array.from(serverUuids).forEach((serverUuid) => {
         const params = this.serverParamsCache[serverUuid];
-        if (params) {
+        if (params && !shouldBypassSseIdlePool(params)) {
           // Note: We don't have namespaceUuid here, so we can't track crashes properly
           // This is a limitation of the current design - we'll need to pass namespaceUuid from the caller
           this.createIdleSessionAsync(serverUuid, params);

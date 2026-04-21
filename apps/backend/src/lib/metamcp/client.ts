@@ -10,6 +10,11 @@ import logger from "@/utils/logger";
 import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed-transport";
 import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
+import {
+  debugLogDownstreamSseConnect,
+  isForwardSseHeadersEnabled,
+  mergeSseDownstreamHeaders,
+} from "./forward-headers";
 import { resolveEnvVariables } from "./utils";
 
 const sleep = (time: number) =>
@@ -20,6 +25,11 @@ export interface ConnectedClient {
   cleanup: () => Promise<void>;
   onProcessCrash?: (exitCode: number | null, signal: string | null) => void;
 }
+
+/** Optional headers merged into outbound SSE when `METAMCP_FORWARD_SSE_HEADERS=1`. */
+export type CreateMetaMcpClientOptions = {
+  sseForwardHeaders?: Record<string, string>;
+};
 
 /**
  * Transforms localhost URLs to use host.docker.internal when running inside Docker
@@ -37,6 +47,7 @@ export const transformDockerUrl = (url: string): string => {
 
 export const createMetaMcpClient = (
   serverParams: ServerParameters,
+  connectOptions?: CreateMetaMcpClientOptions,
 ): { client: Client | undefined; transport: Transport | undefined } => {
   let transport: Transport | undefined;
 
@@ -81,17 +92,30 @@ export const createMetaMcpClient = (
     // Transform the URL if TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL is set to "true"
     const transformedUrl = transformDockerUrl(serverParams.url);
 
-    // Build headers: start with custom headers, then add auth header
-    const headers: Record<string, string> = {
-      ...(serverParams.headers || {}),
-    };
+    const forward = connectOptions?.sseForwardHeaders;
+    const useForward =
+      isForwardSseHeadersEnabled() &&
+      forward &&
+      Object.keys(forward).length > 0;
+
+    // Build headers: optional ingress merge (SSE forward mode), else DB headers only
+    const headers: Record<string, string> = useForward
+      ? mergeSseDownstreamHeaders(forward, serverParams)
+      : { ...(serverParams.headers || {}) };
 
     // Check for authentication - prioritize OAuth tokens, fallback to bearerToken
     const authToken =
       serverParams.oauth_tokens?.access_token || serverParams.bearerToken;
     if (authToken) {
+      delete headers["authorization"];
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+
+    debugLogDownstreamSseConnect(
+      serverParams.name || serverParams.uuid,
+      transformedUrl,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 
@@ -162,6 +186,7 @@ export const createMetaMcpClient = (
 export const connectMetaMcpClient = async (
   serverParams: ServerParameters,
   onProcessCrash?: (exitCode: number | null, signal: string | null) => void,
+  connectOptions?: CreateMetaMcpClientOptions,
 ): Promise<ConnectedClient | undefined> => {
   const waitFor = 5000;
 
@@ -193,7 +218,7 @@ export const connectMetaMcpClient = async (
       }
 
       // Create fresh client and transport for each attempt
-      const result = createMetaMcpClient(serverParams);
+      const result = createMetaMcpClient(serverParams, connectOptions);
       client = result.client;
       transport = result.transport;
 
