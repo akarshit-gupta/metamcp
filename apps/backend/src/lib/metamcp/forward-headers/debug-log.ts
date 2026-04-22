@@ -1,17 +1,19 @@
 import type { IncomingHttpHeaders } from "node:http";
 
-import logger from "@/utils/logger";
-
 import { isDebugIncomingHeadersEnabled } from "./env";
 import { normalizeIncomingHeaders } from "./normalize";
 
+/**
+ * Uses `console.log` (not the app logger) so lines show in `kubectl logs` even when
+ * `LOG_LEVEL=errors-only` — the normal logger would drop these as INFO.
+ */
 function logHeaderBlock(title: string, headers: Record<string, string>): void {
   const names = Object.keys(headers).sort();
-  logger.info(
+  console.log(
     `[MetaMCP DEBUG incoming headers] ${title} (${names.length} header names)`,
   );
   for (const name of names) {
-    logger.info(`  ${name}: ${headers[name]}`);
+    console.log(`  ${name}: ${headers[name]}`);
   }
 }
 

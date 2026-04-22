@@ -22,6 +22,7 @@ function getHttpishCode(error: unknown): number | undefined {
 /**
  * Log before `Client.connect` for any child MCP (downstream) transport.
  * Pass `resolvedUrl` = URL after e.g. `transformDockerUrl` (SSE / Streamable HTTP only).
+ * Uses `console.log` so attempt lines appear when `LOG_LEVEL=errors-only`.
  */
 export function debugLogMcpConnectAttempt(args: {
   serverParams: ServerParameters;
@@ -35,13 +36,13 @@ export function debugLogMcpConnectAttempt(args: {
   const { serverParams, resolvedUrl, transportKind, sseForwardHeaders } = args;
   const p = serverParams;
   if (transportKind === "STDIO") {
-    logger.info(
+    console.log(
       `[MetaMCP DEBUG MCP connect] attempt name="${p.name}" uuid=${p.uuid} type=STDIO ` +
         `command=${p.command || ""} args=${(p.args || []).join(" ")}`,
     );
     return;
   }
-  logger.info(
+  console.log(
     `[MetaMCP DEBUG MCP connect] attempt name="${p.name}" uuid=${p.uuid} ` +
       `type=${transportKind} url=${resolvedUrl || p.url || "missing"} ` +
       `sseForwardHeaders=${sseForwardHeaders}`,
