@@ -39,7 +39,8 @@ export function debugLogIncomingSsePost(
   );
 }
 
-export function debugLogDownstreamSseConnect(
+export function debugLogDownstreamMcpConnect(
+  transportLabel: "SSE" | "Streamable HTTP",
   serverName: string,
   url: string,
   headers: Record<string, string>,
@@ -52,7 +53,16 @@ export function debugLogDownstreamSseConnect(
     /* keep raw */
   }
   logHeaderBlock(
-    `[MetaMCP DEBUG downstream headers] SSE connect → ${serverName} (${host})`,
+    `[MetaMCP DEBUG downstream headers] ${transportLabel} connect → ${serverName} (${host})`,
     headers,
   );
+}
+
+/** @deprecated use debugLogDownstreamMcpConnect("SSE", ...) */
+export function debugLogDownstreamSseConnect(
+  serverName: string,
+  url: string,
+  headers: Record<string, string>,
+): void {
+  debugLogDownstreamMcpConnect("SSE", serverName, url, headers);
 }

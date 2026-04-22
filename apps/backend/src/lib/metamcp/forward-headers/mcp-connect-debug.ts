@@ -28,12 +28,12 @@ export function debugLogMcpConnectAttempt(args: {
   serverParams: ServerParameters;
   resolvedUrl?: string;
   transportKind: "SSE" | "STREAMABLE_HTTP" | "STDIO";
-  sseForwardHeaders: boolean;
+  hasIngressForward: boolean;
 }): void {
   if (!isDebugMcpConnectEnabled()) {
     return;
   }
-  const { serverParams, resolvedUrl, transportKind, sseForwardHeaders } = args;
+  const { serverParams, resolvedUrl, transportKind, hasIngressForward } = args;
   const p = serverParams;
   if (transportKind === "STDIO") {
     console.log(
@@ -45,7 +45,7 @@ export function debugLogMcpConnectAttempt(args: {
   console.log(
     `[MetaMCP DEBUG MCP connect] attempt name="${p.name}" uuid=${p.uuid} ` +
       `type=${transportKind} url=${resolvedUrl || p.url || "missing"} ` +
-      `sseForwardHeaders=${sseForwardHeaders}`,
+      `ingressForward=${hasIngressForward}`,
   );
 }
 

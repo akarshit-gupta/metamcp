@@ -11,7 +11,7 @@ import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed
 import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
 import {
-  debugLogDownstreamSseConnect,
+  debugLogDownstreamMcpConnect,
   debugLogMcpConnectAttempt,
   debugLogMcpConnectFailure,
   isForwardSseHeadersEnabled,
@@ -28,10 +28,21 @@ export interface ConnectedClient {
   onProcessCrash?: (exitCode: number | null, signal: string | null) => void;
 }
 
-/** Optional headers merged into outbound SSE when `METAMCP_FORWARD_SSE_HEADERS=1`. */
+/** Merged with DB headers for **SSE and Streamable HTTP** when `METAMCP_FORWARD_SSE_HEADERS=1`. */
 export type CreateMetaMcpClientOptions = {
+  /** Public ingress (LibreChat) snapshot. */
+  publicIngressHeaders?: Record<string, string>;
+  /** @deprecated use `publicIngressHeaders` (same value) */
   sseForwardHeaders?: Record<string, string>;
 };
+
+function getPublicIngress(
+  o?: CreateMetaMcpClientOptions,
+): Record<string, string> | undefined {
+  const h = o?.publicIngressHeaders ?? o?.sseForwardHeaders;
+  if (!h || Object.keys(h).length === 0) return undefined;
+  return h;
+}
 
 /**
  * Transforms localhost URLs to use host.docker.internal when running inside Docker
@@ -94,11 +105,8 @@ export const createMetaMcpClient = (
     // Transform the URL if TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL is set to "true"
     const transformedUrl = transformDockerUrl(serverParams.url);
 
-    const forward = connectOptions?.sseForwardHeaders;
-    const useForward =
-      isForwardSseHeadersEnabled() &&
-      forward &&
-      Object.keys(forward).length > 0;
+    const forward = getPublicIngress(connectOptions);
+    const useForward = isForwardSseHeadersEnabled() && !!forward;
 
     // Build headers: optional ingress merge (SSE forward mode), else DB headers only
     const headers: Record<string, string> = useForward
@@ -113,7 +121,8 @@ export const createMetaMcpClient = (
       headers["Authorization"] = `Bearer ${authToken}`;
     }
 
-    debugLogDownstreamSseConnect(
+    debugLogDownstreamMcpConnect(
+      "SSE",
       serverParams.name || serverParams.uuid,
       transformedUrl,
       headers,
@@ -137,17 +146,27 @@ export const createMetaMcpClient = (
     // Transform the URL if TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL is set to "true"
     const transformedUrl = transformDockerUrl(serverParams.url);
 
-    // Build headers: start with custom headers, then add auth header
-    const headers: Record<string, string> = {
-      ...(serverParams.headers || {}),
-    };
+    const forward = getPublicIngress(connectOptions);
+    const useForward = isForwardSseHeadersEnabled() && !!forward;
+
+    const headers: Record<string, string> = useForward
+      ? mergeSseDownstreamHeaders(forward, serverParams)
+      : { ...(serverParams.headers || {}) };
 
     // Check for authentication - prioritize OAuth tokens, fallback to bearerToken
     const authToken =
       serverParams.oauth_tokens?.access_token || serverParams.bearerToken;
     if (authToken) {
+      delete headers["authorization"];
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+
+    debugLogDownstreamMcpConnect(
+      "Streamable HTTP",
+      serverParams.name || serverParams.uuid,
+      transformedUrl,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 
@@ -240,15 +259,12 @@ export const connectMetaMcpClient = async (
         transportKind = "STDIO";
       }
 
-      const sseForwardHeaders = Boolean(
-        connectOptions?.sseForwardHeaders &&
-          Object.keys(connectOptions.sseForwardHeaders).length > 0,
-      );
+      const hasIngressForward = Boolean(getPublicIngress(connectOptions));
       debugLogMcpConnectAttempt({
         serverParams,
         resolvedUrl,
         transportKind,
-        sseForwardHeaders,
+        hasIngressForward,
       });
 
       // Set up process crash detection for STDIO transports BEFORE connecting

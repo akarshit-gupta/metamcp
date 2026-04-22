@@ -1,4 +1,7 @@
-/** When `1`, merge LibreChat (ingress) headers into outbound SSE MCP client connections. */
+/**
+ * When `1`, merge LibreChat (ingress) headers into outbound child MCP **SSE** and
+ * **Streamable HTTP** client connections.
+ */
 export function isForwardSseHeadersEnabled(): boolean {
   return process.env.METAMCP_FORWARD_SSE_HEADERS === "1";
 }

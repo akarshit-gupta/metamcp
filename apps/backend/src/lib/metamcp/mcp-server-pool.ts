@@ -10,7 +10,7 @@ import {
 } from "./client";
 import {
   getSseForwardSnapshotForSession,
-  shouldBypassSseIdlePool,
+  shouldBypassIdleForIngressForward,
 } from "./forward-headers";
 import { serverErrorTracker } from "./server-error-tracker";
 
@@ -98,11 +98,12 @@ export class McpServerPool {
       this.sessionTimestamps[sessionId] = Date.now();
     }
 
-    const bypassIdle = shouldBypassSseIdlePool(params);
+    const bypassIdle = shouldBypassIdleForIngressForward(params);
     const forwardSnap = getSseForwardSnapshotForSession(sessionId);
     const connectOptions: CreateMetaMcpClientOptions | undefined =
-      params.type === "SSE" && forwardSnap
-        ? { sseForwardHeaders: forwardSnap }
+      forwardSnap &&
+      (params.type === "SSE" || params.type === "STREAMABLE_HTTP")
+        ? { publicIngressHeaders: forwardSnap, sseForwardHeaders: forwardSnap }
         : undefined;
 
     // Check if we have an idle session for this server that we can convert
@@ -222,7 +223,7 @@ export class McpServerPool {
     params: ServerParameters,
     namespaceUuid?: string,
   ): Promise<void> {
-    if (shouldBypassSseIdlePool(params)) {
+    if (shouldBypassIdleForIngressForward(params)) {
       return;
     }
 
@@ -246,7 +247,7 @@ export class McpServerPool {
     params: ServerParameters,
     namespaceUuid?: string,
   ): void {
-    if (shouldBypassSseIdlePool(params)) {
+    if (shouldBypassIdleForIngressForward(params)) {
       return;
     }
 
@@ -306,7 +307,7 @@ export class McpServerPool {
   ): Promise<void> {
     const promises = Object.entries(serverParams).map(
       async ([uuid, params]) => {
-        if (shouldBypassSseIdlePool(params)) {
+        if (shouldBypassIdleForIngressForward(params)) {
           return;
         }
         if (!this.idleSessions[uuid]) {
@@ -346,7 +347,7 @@ export class McpServerPool {
       // For each server this session was using, create new idle sessions if needed (ASYNC - NON-BLOCKING)
       Array.from(serverUuids).forEach((serverUuid) => {
         const params = this.serverParamsCache[serverUuid];
-        if (params && !shouldBypassSseIdlePool(params)) {
+        if (params && !shouldBypassIdleForIngressForward(params)) {
           // Note: We don't have namespaceUuid here, so we can't track crashes properly
           // This is a limitation of the current design - we'll need to pass namespaceUuid from the caller
           this.createIdleSessionAsync(serverUuid, params);

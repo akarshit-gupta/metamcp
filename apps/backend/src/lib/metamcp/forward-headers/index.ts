@@ -10,6 +10,7 @@ export {
 export { normalizeIncomingHeaders } from "./normalize";
 export {
   setPublicSseSnapshotFromRequest,
+  mergePublicSseSnapshotFromRequest,
   getPublicSseSnapshot,
   clearPublicSseSnapshot,
 } from "./store";
@@ -17,6 +18,7 @@ export { mergeSseDownstreamHeaders } from "./merge-sse-downstream";
 export {
   debugLogIncomingSseGet,
   debugLogIncomingSsePost,
+  debugLogDownstreamMcpConnect,
   debugLogDownstreamSseConnect,
 } from "./debug-log";
 
@@ -32,6 +34,7 @@ import {
 import {
   clearPublicSseSnapshot,
   getPublicSseSnapshot,
+  mergePublicSseSnapshotFromRequest,
   setPublicSseSnapshotFromRequest,
 } from "./store";
 
@@ -46,22 +49,39 @@ export function onPublicSseGet(
   setPublicSseSnapshotFromRequest(sessionId, headers);
 }
 
-/** Public SSE POST /message: optional debug only. */
+/** Public SSE POST /message: debug + optional merge of headers into the forward snapshot. */
 export function onPublicSseMessage(
   sessionId: string,
   endpointName: string,
   headers: IncomingHttpHeaders,
 ): void {
   debugLogIncomingSsePost(endpointName, sessionId, headers);
+  if (!isForwardSseHeadersEnabled()) return;
+  mergePublicSseSnapshotFromRequest(sessionId, headers);
 }
 
 export function clearPublicForwardHeadersSession(sessionId: string): void {
   clearPublicSseSnapshot(sessionId);
 }
 
-/** Whether idle pool must be skipped for this backend (SSE + forward mode). */
-export function shouldBypassSseIdlePool(serverParams: ServerParameters): boolean {
-  return isForwardSseHeadersEnabled() && serverParams.type === "SSE";
+/**
+ * When ingress forwarding is on, skip idle reuse for any HTTP child transport that
+ * carries the merged ingress headers (SSE and Streamable HTTP), so connections are
+ * not shared across user sessions.
+ */
+export function shouldBypassIdleForIngressForward(
+  serverParams: ServerParameters,
+): boolean {
+  if (!isForwardSseHeadersEnabled()) return false;
+  const t = serverParams.type;
+  return t === "SSE" || t === "STREAMABLE_HTTP";
+}
+
+/** @deprecated use shouldBypassIdleForIngressForward */
+export function shouldBypassSseIdlePool(
+  serverParams: ServerParameters,
+): boolean {
+  return shouldBypassIdleForIngressForward(serverParams);
 }
 
 export function getSseForwardSnapshotForSession(
