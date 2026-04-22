@@ -12,6 +12,8 @@ import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
 import {
   debugLogDownstreamSseConnect,
+  debugLogMcpConnectAttempt,
+  debugLogMcpConnectFailure,
   isForwardSseHeadersEnabled,
   mergeSseDownstreamHeaders,
 } from "./forward-headers";
@@ -204,6 +206,8 @@ export const connectMetaMcpClient = async (
   while (retry) {
     let transport: Transport | undefined;
     let client: Client | undefined;
+    let resolvedUrl: string | undefined;
+    let transportKind: "SSE" | "STREAMABLE_HTTP" | "STDIO" = "STDIO";
 
     try {
       // Check if server is already in error state before attempting connection
@@ -225,6 +229,27 @@ export const connectMetaMcpClient = async (
       if (!client || !transport) {
         return undefined;
       }
+
+      if (serverParams.type === "SSE" && serverParams.url) {
+        transportKind = "SSE";
+        resolvedUrl = transformDockerUrl(serverParams.url);
+      } else if (serverParams.type === "STREAMABLE_HTTP" && serverParams.url) {
+        transportKind = "STREAMABLE_HTTP";
+        resolvedUrl = transformDockerUrl(serverParams.url);
+      } else {
+        transportKind = "STDIO";
+      }
+
+      const sseForwardHeaders = Boolean(
+        connectOptions?.sseForwardHeaders &&
+          Object.keys(connectOptions.sseForwardHeaders).length > 0,
+      );
+      debugLogMcpConnectAttempt({
+        serverParams,
+        resolvedUrl,
+        transportKind,
+        sseForwardHeaders,
+      });
 
       // Set up process crash detection for STDIO transports BEFORE connecting
       if (transport instanceof ProcessManagedStdioTransport) {
@@ -270,6 +295,14 @@ export const connectMetaMcpClient = async (
         },
       };
     } catch (error) {
+      debugLogMcpConnectFailure({
+        serverParams,
+        resolvedUrl,
+        transportKind,
+        error,
+        attempt: count + 1,
+        maxAttempts,
+      });
       metamcpLogStore.addLog(
         "client",
         "error",

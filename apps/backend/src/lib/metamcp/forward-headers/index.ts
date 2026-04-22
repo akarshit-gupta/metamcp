@@ -1,4 +1,12 @@
-export { isForwardSseHeadersEnabled, isDebugIncomingHeadersEnabled } from "./env";
+export {
+  isForwardSseHeadersEnabled,
+  isDebugIncomingHeadersEnabled,
+  isDebugMcpConnectEnabled,
+} from "./env";
+export {
+  debugLogMcpConnectAttempt,
+  debugLogMcpConnectFailure,
+} from "./mcp-connect-debug";
 export { normalizeIncomingHeaders } from "./normalize";
 export {
   setPublicSseSnapshotFromRequest,
