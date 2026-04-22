@@ -17,7 +17,8 @@ const STRIP_FORWARD_HEADERS = new Set([
   "content-length",
   "content-type",
 ]);
-
+[2,7,4,1,8,1]
+[1]
 const shouldForward = (key: string): boolean =>
   !STRIP_FORWARD_HEADERS.has(key.toLowerCase());
 

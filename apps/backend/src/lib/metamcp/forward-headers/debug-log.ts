@@ -1,19 +1,15 @@
 import type { IncomingHttpHeaders } from "node:http";
 
+import logger from "@/utils/logger";
+
 import { isDebugIncomingHeadersEnabled } from "./env";
 import { normalizeIncomingHeaders } from "./normalize";
 
-/**
- * Uses `console.log` (not the app logger) so lines show in `kubectl logs` even when
- * `LOG_LEVEL=errors-only` — the normal logger would drop these as INFO.
- */
-function logHeaderBlock(title: string, headers: Record<string, string>): void {
+function logLines(firstLine: string, headers: Record<string, string>): void {
   const names = Object.keys(headers).sort();
-  console.log(
-    `[MetaMCP DEBUG incoming headers] ${title} (${names.length} header names)`,
-  );
+  logger.info(`${firstLine} (${names.length} header names)`);
   for (const name of names) {
-    console.log(`  ${name}: ${headers[name]}`);
+    logger.info(`  ${name}: ${headers[name]}`);
   }
 }
 
@@ -23,7 +19,10 @@ export function debugLogIncomingSseGet(
 ): void {
   if (!isDebugIncomingHeadersEnabled()) return;
   const h = normalizeIncomingHeaders(headers);
-  logHeaderBlock(`SSE GET /${endpointName}/sse`, h);
+  logLines(
+    `[MetaMCP DEBUG incoming] SSE GET /${endpointName}/sse`,
+    h,
+  );
 }
 
 export function debugLogIncomingSsePost(
@@ -33,8 +32,8 @@ export function debugLogIncomingSsePost(
 ): void {
   if (!isDebugIncomingHeadersEnabled()) return;
   const h = normalizeIncomingHeaders(headers);
-  logHeaderBlock(
-    `SSE POST /${endpointName}/message sessionId=${sessionId}`,
+  logLines(
+    `[MetaMCP DEBUG incoming] SSE POST /${endpointName}/message sessionId=${sessionId}`,
     h,
   );
 }
@@ -52,17 +51,8 @@ export function debugLogDownstreamMcpConnect(
   } catch {
     /* keep raw */
   }
-  logHeaderBlock(
-    `[MetaMCP DEBUG downstream headers] ${transportLabel} connect → ${serverName} (${host})`,
+  logLines(
+    `[MetaMCP DEBUG downstream] ${transportLabel} connect → ${serverName} (${host})`,
     headers,
   );
-}
-
-/** @deprecated use debugLogDownstreamMcpConnect("SSE", ...) */
-export function debugLogDownstreamSseConnect(
-  serverName: string,
-  url: string,
-  headers: Record<string, string>,
-): void {
-  debugLogDownstreamMcpConnect("SSE", serverName, url, headers);
 }

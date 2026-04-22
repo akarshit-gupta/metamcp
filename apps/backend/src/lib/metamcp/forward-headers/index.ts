@@ -1,12 +1,7 @@
 export {
   isForwardSseHeadersEnabled,
   isDebugIncomingHeadersEnabled,
-  isDebugMcpConnectEnabled,
 } from "./env";
-export {
-  debugLogMcpConnectAttempt,
-  debugLogMcpConnectFailure,
-} from "./mcp-connect-debug";
 export { normalizeIncomingHeaders } from "./normalize";
 export {
   setPublicSseSnapshotFromRequest,
@@ -19,7 +14,6 @@ export {
   debugLogIncomingSseGet,
   debugLogIncomingSsePost,
   debugLogDownstreamMcpConnect,
-  debugLogDownstreamSseConnect,
 } from "./debug-log";
 
 import type { IncomingHttpHeaders } from "node:http";
@@ -75,13 +69,6 @@ export function shouldBypassIdleForIngressForward(
   if (!isForwardSseHeadersEnabled()) return false;
   const t = serverParams.type;
   return t === "SSE" || t === "STREAMABLE_HTTP";
-}
-
-/** @deprecated use shouldBypassIdleForIngressForward */
-export function shouldBypassSseIdlePool(
-  serverParams: ServerParameters,
-): boolean {
-  return shouldBypassIdleForIngressForward(serverParams);
 }
 
 export function getSseForwardSnapshotForSession(

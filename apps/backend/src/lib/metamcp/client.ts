@@ -12,8 +12,6 @@ import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
 import {
   debugLogDownstreamMcpConnect,
-  debugLogMcpConnectAttempt,
-  debugLogMcpConnectFailure,
   isForwardSseHeadersEnabled,
   mergeSseDownstreamHeaders,
 } from "./forward-headers";
@@ -30,16 +28,13 @@ export interface ConnectedClient {
 
 /** Merged with DB headers for **SSE and Streamable HTTP** when `METAMCP_FORWARD_SSE_HEADERS=1`. */
 export type CreateMetaMcpClientOptions = {
-  /** Public ingress (LibreChat) snapshot. */
   publicIngressHeaders?: Record<string, string>;
-  /** @deprecated use `publicIngressHeaders` (same value) */
-  sseForwardHeaders?: Record<string, string>;
 };
 
 function getPublicIngress(
   o?: CreateMetaMcpClientOptions,
 ): Record<string, string> | undefined {
-  const h = o?.publicIngressHeaders ?? o?.sseForwardHeaders;
+  const h = o?.publicIngressHeaders;
   if (!h || Object.keys(h).length === 0) return undefined;
   return h;
 }
@@ -259,14 +254,6 @@ export const connectMetaMcpClient = async (
         transportKind = "STDIO";
       }
 
-      const hasIngressForward = Boolean(getPublicIngress(connectOptions));
-      debugLogMcpConnectAttempt({
-        serverParams,
-        resolvedUrl,
-        transportKind,
-        hasIngressForward,
-      });
-
       // Set up process crash detection for STDIO transports BEFORE connecting
       if (transport instanceof ProcessManagedStdioTransport) {
         logger.info(
@@ -311,31 +298,26 @@ export const connectMetaMcpClient = async (
         },
       };
     } catch (error) {
-      debugLogMcpConnectFailure({
-        serverParams,
-        resolvedUrl,
-        transportKind,
-        error,
-        attempt: count + 1,
-        maxAttempts,
-      });
-      metamcpLogStore.addLog(
-        "client",
-        "error",
-        `Error connecting to MetaMCP client (attempt ${count + 1}/${maxAttempts})`,
-        error,
+      const errCode =
+        error && typeof error === "object" && "code" in error
+          ? (error as { code: unknown }).code
+          : undefined;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        `[MetaMCP][client] child MCP connect failed: "${serverParams.name}" (${serverParams.uuid}) ` +
+          `attempt ${count + 1}/${maxAttempts} ${transportKind} ` +
+          `url=${resolvedUrl || serverParams.url || "n/a"} ` +
+          `${errCode !== undefined ? `code=${String(errCode)} ` : ""}— ${errMsg}`,
       );
 
-      // CRITICAL FIX: Clean up transport/process on connection failure
-      // This prevents orphaned processes from accumulating
       if (transport) {
         try {
           await transport.close();
-          console.log(
+          logger.info(
             `Cleaned up transport for failed connection to ${serverParams.name} (${serverParams.uuid})`,
           );
         } catch (cleanupError) {
-          console.error(
+          logger.error(
             `Error cleaning up transport for ${serverParams.name} (${serverParams.uuid}):`,
             cleanupError,
           );

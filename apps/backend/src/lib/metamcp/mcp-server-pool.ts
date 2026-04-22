@@ -103,7 +103,7 @@ export class McpServerPool {
     const connectOptions: CreateMetaMcpClientOptions | undefined =
       forwardSnap &&
       (params.type === "SSE" || params.type === "STREAMABLE_HTTP")
-        ? { publicIngressHeaders: forwardSnap, sseForwardHeaders: forwardSnap }
+        ? { publicIngressHeaders: forwardSnap }
         : undefined;
 
     // Check if we have an idle session for this server that we can convert
