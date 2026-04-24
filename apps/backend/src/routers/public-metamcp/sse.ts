@@ -123,6 +123,8 @@ sseRouter.post(
   authenticateApiKey,
   rateLimitMiddleware,
   async (req, res) => {
+    // const authReq = req as ApiKeyAuthenticatedRequest;
+    // const { namespaceUuid, endpointName } = authReq;
     const authReq = req as ApiKeyAuthenticatedRequest;
 
     try {
