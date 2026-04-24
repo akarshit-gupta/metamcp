@@ -294,7 +294,9 @@ export const connectMetaMcpClient = async (
           `url=${resolvedUrl || serverParams.url || "n/a"} ` +
           `${errCode !== undefined ? `code=${String(errCode)} ` : ""}— ${errMsg}`,
       );
-
+      
+      // CRITICAL FIX: Clean up transport/process on connection failure
+      // This prevents orphaned processes from accumulating
       if (transport) {
         try {
           await transport.close();
