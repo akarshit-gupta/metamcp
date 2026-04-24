@@ -11,6 +11,10 @@ export {
 } from "./store";
 export { mergeSseDownstreamHeaders } from "./merge-sse-downstream";
 export {
+  buildHttpChildMcpRequestHeaders,
+  type HttpChildMcpConnectOptions,
+} from "./http-child-headers";
+export {
   debugLogIncomingSseGet,
   debugLogIncomingSsePost,
   debugLogDownstreamMcpConnect,
