@@ -298,11 +298,11 @@ export const connectMetaMcpClient = async (
       if (transport) {
         try {
           await transport.close();
-          logger.info(
+          console.log(
             `Cleaned up transport for failed connection to ${serverParams.name} (${serverParams.uuid})`,
           );
         } catch (cleanupError) {
-          logger.error(
+          console.error(
             `Error cleaning up transport for ${serverParams.name} (${serverParams.uuid}):`,
             cleanupError,
           );
