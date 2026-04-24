@@ -1,5 +1,6 @@
+import { createWriteStream, WriteStream } from "fs";
 import { format } from "util";
-const { LOG_LEVEL } = process.env;
+const { LOG_LEVEL, ENABLE_FILE_BASED_LOGS } = process.env;
 
 const validLogLevels = ["all", "info", "errors-only", "none"] as const;
 type ValidLogLevel = (typeof validLogLevels)[number];
@@ -24,18 +25,21 @@ export class Logger {
   public static readonly defaultLogFilePath = "app.log";
   public static readonly defaultErrorFilePath = "error.log";
 
+  private logFile: WriteStream | undefined;
+  private errorFile: WriteStream | undefined;
   private consoleMode: "all" | "info" | "errors-only" | "none";
 
   constructor(options: LoggerOptions = {}) {
-    const { shouldConsoleLog = "all" } = options;
+    const {
+      logFilePath = Logger.defaultLogFilePath,
+      errorFilePath = Logger.defaultErrorFilePath,
+      shouldConsoleLog = "all",
+    } = options;
 
-    // File logging (app.log / error.log) is disabled: read-only root FS in K8s (EROFS) and
-    // operators rely on process stdout/stderr (kubectl logs). Re-enable with createWriteStream
-    // to logFilePath / errorFilePath if you need local files in dev.
-    // const logFilePath = options.logFilePath ?? Logger.defaultLogFilePath;
-    // const errorFilePath = options.errorFilePath ?? Logger.defaultErrorFilePath;
-    // this.logFile = createWriteStream(logFilePath, { flags: "a" });
-    // this.errorFile = createWriteStream(errorFilePath, { flags: "a" });
+    if (ENABLE_FILE_BASED_LOGS === "1") {
+      this.logFile = createWriteStream(logFilePath, { flags: "a" });
+      this.errorFile = createWriteStream(errorFilePath, { flags: "a" });
+    }
 
     this.consoleMode =
       typeof shouldConsoleLog === "boolean"
@@ -55,43 +59,50 @@ export class Logger {
   }
 
   private customLog(
+    outputStream: WriteStream | undefined,
     level: "DEBUG" | "INFO" | "WARN" | "ERROR",
     ...args: unknown[]
   ) {
     const logMessage = format(...(args as unknown[]));
     const formattedMessage = `[${level}] ${this.formatDate(new Date())} | ${logMessage}\n`;
-
-    if (this.consoleMode === "none") {
-      return;
+    if (outputStream) {
+      outputStream.write(formattedMessage);
     }
 
-    const shouldMirror =
-      this.consoleMode === "all" ||
-      (this.consoleMode === "info" && level === "INFO") ||
-      (this.consoleMode === "errors-only" &&
-        (level === "WARN" || level === "ERROR"));
+    if (this.consoleMode !== "none") {
+      const shouldMirror =
+        this.consoleMode === "all" ||
+        (this.consoleMode === "info" && level === "INFO") ||
+        (this.consoleMode === "errors-only" &&
+          (level === "WARN" || level === "ERROR"));
 
-    if (shouldMirror) {
-      const trimmed = formattedMessage.trim();
-      if (level === "INFO") {
-        console.info(trimmed);
-      } else if (level === "ERROR") {
-        console.error(trimmed);
-      } else if (level === "WARN") {
-        console.warn(trimmed);
-      } else {
-        console.log(trimmed);
+      if (shouldMirror) {
+        const trimmed = formattedMessage.trim();
+        if (level === "INFO") {
+          console.info(trimmed);
+        } else if (level === "ERROR") {
+          console.error(trimmed);
+        } else if (level === "WARN") {
+          console.warn(trimmed);
+        } else {
+          console.log(trimmed);
+        }
       }
     }
   }
 
-  public debug = (...args: unknown[]) => this.customLog("DEBUG", ...args);
-  public info = (...args: unknown[]) => this.customLog("INFO", ...args);
-  public warn = (...args: unknown[]) => this.customLog("WARN", ...args);
-  public error = (...args: unknown[]) => this.customLog("ERROR", ...args);
+  public debug = (...args: unknown[]) =>
+    this.customLog(this.logFile, "DEBUG", ...args);
+  public info = (...args: unknown[]) =>
+    this.customLog(this.logFile, "INFO", ...args);
+  public warn = (...args: unknown[]) =>
+    this.customLog(this.logFile, "WARN", ...args);
+  public error = (...args: unknown[]) =>
+    this.customLog(this.errorFile, "ERROR", ...args);
 
   public close(): void {
-    // No file streams to close; kept for API compatibility
+    this.logFile?.end();
+    this.errorFile?.end();
   }
 }
 
