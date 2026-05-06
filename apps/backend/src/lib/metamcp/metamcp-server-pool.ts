@@ -3,6 +3,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import logger from "@/utils/logger";
 
 import { configService } from "../config.service";
+import { isForwardSseHeadersEnabled } from "./forward-headers";
 import { mcpServerPool } from "./mcp-server-pool";
 import { createServer } from "./metamcp-proxy";
 
@@ -49,6 +50,15 @@ export class MetaMcpServerPool {
   }
 
   /**
+   * In ingress-forward mode, we must always build active MetaMCP servers with the
+   * real incoming sessionId. Reusing idle unified servers would preserve an old
+   * handler context sessionId and break downstream header lookup.
+   */
+  private shouldBypassIdleServers(): boolean {
+    return isForwardSseHeadersEnabled();
+  }
+
+  /**
    * Get the singleton instance
    */
   static getInstance(defaultIdleCount: number = 1): MetaMcpServerPool {
@@ -66,28 +76,32 @@ export class MetaMcpServerPool {
     namespaceUuid: string,
     includeInactiveServers: boolean = false,
   ): Promise<MetaMcpServerInstance | undefined> {
+    const bypassIdleServers = this.shouldBypassIdleServers();
+
     // Check if we already have an active server for this sessionId
     if (this.activeServers[sessionId]) {
       return this.activeServers[sessionId];
     }
 
     // Check if we have an idle server for this namespace that we can convert
-    const idleServer = this.idleServers[namespaceUuid];
-    if (idleServer) {
-      // Convert idle server to active server
-      delete this.idleServers[namespaceUuid];
-      this.activeServers[sessionId] = idleServer;
-      this.sessionToNamespace[sessionId] = namespaceUuid;
-      this.sessionTimestamps[sessionId] = Date.now();
+    if (!bypassIdleServers) {
+      const idleServer = this.idleServers[namespaceUuid];
+      if (idleServer) {
+        // Convert idle server to active server
+        delete this.idleServers[namespaceUuid];
+        this.activeServers[sessionId] = idleServer;
+        this.sessionToNamespace[sessionId] = namespaceUuid;
+        this.sessionTimestamps[sessionId] = Date.now();
 
-      logger.info(
-        `Converted idle MetaMCP server to active for namespace ${namespaceUuid}, session ${sessionId}`,
-      );
+        logger.info(
+          `Converted idle MetaMCP server to active for namespace ${namespaceUuid}, session ${sessionId}`,
+        );
 
-      // Create a new idle server to replace the one we just used (ASYNC - NON-BLOCKING)
-      this.createIdleServerAsync(namespaceUuid, includeInactiveServers);
+        // Create a new idle server to replace the one we just used (ASYNC - NON-BLOCKING)
+        this.createIdleServerAsync(namespaceUuid, includeInactiveServers);
 
-      return idleServer;
+        return idleServer;
+      }
     }
 
     // No idle server available, create a new one
@@ -109,7 +123,9 @@ export class MetaMcpServerPool {
     );
 
     // Also create an idle server for future use (ASYNC - NON-BLOCKING)
-    this.createIdleServerAsync(namespaceUuid, includeInactiveServers);
+    if (!bypassIdleServers) {
+      this.createIdleServerAsync(namespaceUuid, includeInactiveServers);
+    }
 
     return newServer;
   }
@@ -147,6 +163,10 @@ export class MetaMcpServerPool {
     namespaceUuid: string,
     includeInactiveServers: boolean = false,
   ): Promise<void> {
+    if (this.shouldBypassIdleServers()) {
+      return;
+    }
+
     // Don't create if we already have an idle server for this namespace
     if (this.idleServers[namespaceUuid]) {
       return;
@@ -179,6 +199,10 @@ export class MetaMcpServerPool {
     namespaceUuid: string,
     includeInactiveServers: boolean = false,
   ): void {
+    if (this.shouldBypassIdleServers()) {
+      return;
+    }
+
     // Don't create if we already have an idle server or are already creating one
     if (
       this.idleServers[namespaceUuid] ||
@@ -267,7 +291,9 @@ export class MetaMcpServerPool {
     const namespaceUuid = this.sessionToNamespace[sessionId];
     if (namespaceUuid) {
       // Create a new idle server to replace capacity (ASYNC - NON-BLOCKING)
-      this.createIdleServerAsync(namespaceUuid);
+      if (!this.shouldBypassIdleServers()) {
+        this.createIdleServerAsync(namespaceUuid);
+      }
       delete this.sessionToNamespace[sessionId];
     }
 

@@ -1,6 +1,6 @@
 import { createWriteStream, WriteStream } from "fs";
 import { format } from "util";
-const { LOG_LEVEL } = process.env;
+const { LOG_LEVEL, ENABLE_FILE_BASED_LOGS } = process.env;
 
 const validLogLevels = ["all", "info", "errors-only", "none"] as const;
 type ValidLogLevel = (typeof validLogLevels)[number];
@@ -25,8 +25,8 @@ export class Logger {
   public static readonly defaultLogFilePath = "app.log";
   public static readonly defaultErrorFilePath = "error.log";
 
-  private logFile: WriteStream;
-  private errorFile: WriteStream;
+  private logFile: WriteStream | undefined;
+  private errorFile: WriteStream | undefined;
   private consoleMode: "all" | "info" | "errors-only" | "none";
 
   constructor(options: LoggerOptions = {}) {
@@ -36,8 +36,10 @@ export class Logger {
       shouldConsoleLog = "all",
     } = options;
 
-    this.logFile = createWriteStream(logFilePath, { flags: "a" });
-    this.errorFile = createWriteStream(errorFilePath, { flags: "a" });
+    if (ENABLE_FILE_BASED_LOGS === "1") {
+      this.logFile = createWriteStream(logFilePath, { flags: "a" });
+      this.errorFile = createWriteStream(errorFilePath, { flags: "a" });
+    }
 
     this.consoleMode =
       typeof shouldConsoleLog === "boolean"
@@ -57,13 +59,15 @@ export class Logger {
   }
 
   private customLog(
-    outputStream: WriteStream,
+    outputStream: WriteStream | undefined,
     level: "DEBUG" | "INFO" | "WARN" | "ERROR",
     ...args: unknown[]
   ) {
     const logMessage = format(...(args as unknown[]));
     const formattedMessage = `[${level}] ${this.formatDate(new Date())} | ${logMessage}\n`;
-    outputStream.write(formattedMessage);
+    if (outputStream) {
+      outputStream.write(formattedMessage);
+    }
 
     if (this.consoleMode !== "none") {
       const shouldMirror =
@@ -97,8 +101,8 @@ export class Logger {
     this.customLog(this.errorFile, "ERROR", ...args);
 
   public close(): void {
-    this.logFile.end();
-    this.errorFile.end();
+    this.logFile?.end();
+    this.errorFile?.end();
   }
 }
 

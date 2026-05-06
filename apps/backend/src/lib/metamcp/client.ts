@@ -10,6 +10,11 @@ import logger from "@/utils/logger";
 import { ProcessManagedStdioTransport } from "../stdio-transport/process-managed-transport";
 import { metamcpLogStore } from "./log-store";
 import { serverErrorTracker } from "./server-error-tracker";
+import {
+  buildHttpChildMcpRequestHeaders,
+  debugLogDownstreamMcpConnect,
+  type HttpChildMcpConnectOptions,
+} from "./forward-headers";
 import { resolveEnvVariables } from "./utils";
 
 const sleep = (time: number) =>
@@ -20,6 +25,11 @@ export interface ConnectedClient {
   cleanup: () => Promise<void>;
   onProcessCrash?: (exitCode: number | null, signal: string | null) => void;
 }
+
+/**
+ * @see `HttpChildMcpConnectOptions` in `./forward-headers` (fork: ingress forward for child HTTP MCP).
+ */
+export type CreateMetaMcpClientOptions = HttpChildMcpConnectOptions;
 
 /**
  * Transforms localhost URLs to use host.docker.internal when running inside Docker
@@ -37,6 +47,7 @@ export const transformDockerUrl = (url: string): string => {
 
 export const createMetaMcpClient = (
   serverParams: ServerParameters,
+  connectOptions?: CreateMetaMcpClientOptions,
 ): { client: Client | undefined; transport: Transport | undefined } => {
   let transport: Transport | undefined;
 
@@ -80,18 +91,25 @@ export const createMetaMcpClient = (
   } else if (serverParams.type === "SSE" && serverParams.url) {
     // Transform the URL if TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL is set to "true"
     const transformedUrl = transformDockerUrl(serverParams.url);
-
-    // Build headers: start with custom headers, then add auth header
-    const headers: Record<string, string> = {
-      ...(serverParams.headers || {}),
-    };
+    const headers: Record<string, string> = buildHttpChildMcpRequestHeaders(
+      serverParams,
+      connectOptions,
+    );
 
     // Check for authentication - prioritize OAuth tokens, fallback to bearerToken
     const authToken =
       serverParams.oauth_tokens?.access_token || serverParams.bearerToken;
     if (authToken) {
+      delete headers["authorization"];
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+
+    debugLogDownstreamMcpConnect(
+      "SSE",
+      serverParams.name || serverParams.uuid,
+      transformedUrl,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 
@@ -110,18 +128,25 @@ export const createMetaMcpClient = (
   } else if (serverParams.type === "STREAMABLE_HTTP" && serverParams.url) {
     // Transform the URL if TRANSFORM_LOCALHOST_TO_DOCKER_INTERNAL is set to "true"
     const transformedUrl = transformDockerUrl(serverParams.url);
-
-    // Build headers: start with custom headers, then add auth header
-    const headers: Record<string, string> = {
-      ...(serverParams.headers || {}),
-    };
+    const headers: Record<string, string> = buildHttpChildMcpRequestHeaders(
+      serverParams,
+      connectOptions,
+    );
 
     // Check for authentication - prioritize OAuth tokens, fallback to bearerToken
     const authToken =
       serverParams.oauth_tokens?.access_token || serverParams.bearerToken;
     if (authToken) {
+      delete headers["authorization"];
       headers["Authorization"] = `Bearer ${authToken}`;
     }
+
+    debugLogDownstreamMcpConnect(
+      "Streamable HTTP",
+      serverParams.name || serverParams.uuid,
+      transformedUrl,
+      headers,
+    );
 
     const hasHeaders = Object.keys(headers).length > 0;
 
@@ -162,6 +187,7 @@ export const createMetaMcpClient = (
 export const connectMetaMcpClient = async (
   serverParams: ServerParameters,
   onProcessCrash?: (exitCode: number | null, signal: string | null) => void,
+  connectOptions?: CreateMetaMcpClientOptions,
 ): Promise<ConnectedClient | undefined> => {
   const waitFor = 5000;
 
@@ -179,6 +205,8 @@ export const connectMetaMcpClient = async (
   while (retry) {
     let transport: Transport | undefined;
     let client: Client | undefined;
+    let resolvedUrl: string | undefined;
+    let transportKind: "SSE" | "STREAMABLE_HTTP" | "STDIO" = "STDIO";
 
     try {
       // Check if server is already in error state before attempting connection
@@ -193,12 +221,22 @@ export const connectMetaMcpClient = async (
       }
 
       // Create fresh client and transport for each attempt
-      const result = createMetaMcpClient(serverParams);
+      const result = createMetaMcpClient(serverParams, connectOptions);
       client = result.client;
       transport = result.transport;
 
       if (!client || !transport) {
         return undefined;
+      }
+
+      if (serverParams.type === "SSE" && serverParams.url) {
+        transportKind = "SSE";
+        resolvedUrl = transformDockerUrl(serverParams.url);
+      } else if (serverParams.type === "STREAMABLE_HTTP" && serverParams.url) {
+        transportKind = "STREAMABLE_HTTP";
+        resolvedUrl = transformDockerUrl(serverParams.url);
+      } else {
+        transportKind = "STDIO";
       }
 
       // Set up process crash detection for STDIO transports BEFORE connecting
@@ -245,13 +283,18 @@ export const connectMetaMcpClient = async (
         },
       };
     } catch (error) {
-      metamcpLogStore.addLog(
-        "client",
-        "error",
-        `Error connecting to MetaMCP client (attempt ${count + 1}/${maxAttempts})`,
-        error,
+      const errCode =
+        error && typeof error === "object" && "code" in error
+          ? (error as { code: unknown }).code
+          : undefined;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        `[MetaMCP][client] child MCP connect failed: "${serverParams.name}" (${serverParams.uuid}) ` +
+          `attempt ${count + 1}/${maxAttempts} ${transportKind} ` +
+          `url=${resolvedUrl || serverParams.url || "n/a"} ` +
+          `${errCode !== undefined ? `code=${String(errCode)} ` : ""}— ${errMsg}`,
       );
-
+      
       // CRITICAL FIX: Clean up transport/process on connection failure
       // This prevents orphaned processes from accumulating
       if (transport) {
